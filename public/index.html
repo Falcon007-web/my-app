@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Tools - Remote Desktop</title>
+    <style>
+        body {
+            margin: 0;
+            background: #1a1a1a;
+            color: #fff;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+        header {
+            background: #2c2c2c;
+            padding: 10px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #444;
+        }
+        .pc-title {
+            background: #e9ecef;
+            color: #000;
+            padding: 10px 20px;
+            font-size: 20px;
+            font-weight: bold;
+            border-bottom: 1px solid #ccc;
+        }
+        .toolbar {
+            background: #f8f9fa;
+            padding: 8px 15px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            border-bottom: 1px solid #ddd;
+        }
+        button {
+            background: #e2e6ea;
+            color: #333;
+            border: 1px solid #ced4da;
+            padding: 6px 14px;
+            font-size: 14px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        button:hover { background: #dae0e5; }
+        button.disconnect-btn { background: #f8d7da; color: #721c24; border-color: #f5c6cb; }
+        button.connect-btn { background: #d4edda; color: #155724; border-color: #c3e6cb; }
+
+        #screen-container {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+            background: #000;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            cursor: default;
+        }
+
+        #screen-container.hide-cursor {
+            cursor: none !important;
+        }
+
+        #remoteImage {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #000;
+            display: block;
+        }
+        #center-overlay {
+            position: absolute;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            background: rgba(0,0,0,0.85);
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h3 style="margin:0; color:#fff;">Admin Tools <span style="font-size: 12px; color: #aaa;">In God We trust!</span></h3>
+        <div id="status-top" style="color: #28a745; font-weight: bold;">Ожидание агента...</div>
+    </header>
+
+    <div class="pc-title" id="pc-name">Загрузка имени ПК...</div>
+
+    <div class="toolbar">
+        <button class="disconnect-btn" onclick="disconnectSession()">Разъединить</button>
+        <button id="main-action-btn" class="connect-btn" onclick="toggleConnection()" style="display: none;">Подключить</button>
+        <button id="status-badge" disabled style="background: #e9ecef; color: #495057; cursor: default;">Ожидание</button>
+        
+        <span id="sessionTimer" style="margin-left: 10px; font-weight: bold; color: #333; background: #e2e6ea; padding: 6px 12px; border-radius: 4px; border: 1px solid #ced4da; font-size: 14px;">00:00:00</span>
+
+        <button onclick="toggleFullScreen()" style="margin-left: auto;">Полноэкранный</button>
+    </div>
+
+    <div id="screen-container">
+        <div id="center-overlay">
+            <h2 id="overlay-msg" style="color: #fff;">Поиск агента на компьютере...</h2>
+        </div>
+        <img id="remoteImage" alt="" />
+    </div>
+
+    <script>
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+        const wsUrl = wsProtocol + window.location.host;
+        let ws;
+        let isConnected = false;
+
+        let timerInterval = null;
+        let secondsElapsed = 0;
+
+        function startSessionTimer() {
+            stopSessionTimer();
+            secondsElapsed = 0;
+            const timerElement = document.getElementById('sessionTimer');
+            
+            timerInterval = setInterval(() => {
+                secondsElapsed++;
+                const hrs = Math.floor(secondsElapsed / 3600).toString().padStart(2, '0');
+                const mins = Math.floor((secondsElapsed % 3600) / 60).toString().padStart(2, '0');
+                const secs = (secondsElapsed % 60).toString().padStart(2, '0');
+                timerElement.innerText = `${hrs}:${mins}:${secs}`;
+            }, 1000);
+        }
+
+        function stopSessionTimer() {
+            if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+            }
+            document.getElementById('sessionTimer').innerText = '00:00:00';
+        }
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('c');
+
+        const screenContainer = document.getElementById('screen-container');
+
+        let lastMouseX = 0;
+        let lastMouseY = 0;
+        let mouseMoveScheduled = false;
+
+        screenContainer.addEventListener('mousemove', (e) => {
+            if (!isConnected || !ws || ws.readyState !== WebSocket.OPEN) return;
+            const rect = screenContainer.getBoundingClientRect();
+            
+            lastMouseX = (e.clientX - rect.left) / rect.width;
+            lastMouseY = (e.clientY - rect.top) / rect.height;
+
+            if (!mouseMoveScheduled) {
+                mouseMoveScheduled = true;
+                requestAnimationFrame(() => {
+                    ws.send(JSON.stringify({ 
+                        type: 'input', 
+                        payload: { action: 'mousemove', x: lastMouseX, y: lastMouseY } 
+                    }));
+                    mouseMoveScheduled = false;
+                });
+            }
+        });
+
+        screenContainer.addEventListener('mousedown', (e) => {
+            if (!isConnected || !ws || ws.readyState !== WebSocket.OPEN) return;
+            ws.send(JSON.stringify({ type: 'input', payload: { action: 'mousedown', button: e.button } }));
+        });
+
+        screenContainer.addEventListener('mouseup', (e) => {
+            if (!isConnected || !ws || ws.readyState !== WebSocket.OPEN) return;
+            ws.send(JSON.stringify({ type: 'input', payload: { action: 'mouseup', button: e.button } }));
+        });
+
+        screenContainer.addEventListener('contextmenu', (e) => e.preventDefault());
+
+        window.addEventListener('keydown', (e) => {
+            if (!isConnected || !ws || ws.readyState !== WebSocket.OPEN) return;
+            ws.send(JSON.stringify({ type: 'input', payload: { action: 'keydown', key: e.key, code: e.code } }));
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (!isConnected || !ws || ws.readyState !== WebSocket.OPEN) return;
+            ws.send(JSON.stringify({ type: 'input', payload: { action: 'keyup', key: e.key, code: e.code } }));
+        });
+
+        let currentObjectUrl = null;
+
+        function init() {
+            ws = new WebSocket(wsUrl);
+            ws.binaryType = 'arraybuffer'; // ArrayBuffer formatida qabul qilamiz
+
+            ws.onopen = () => {
+                if (token) {
+                    ws.send(JSON.stringify({ type: 'join-viewer', token: token }));
+                }
+            };
+
+            ws.onmessage = async (event) => {
+                // Binary rasm kelsa
+                if (event.data instanceof ArrayBuffer) {
+                    const blob = new Blob([event.data], { type: 'image/jpeg' });
+                    
+                    if (currentObjectUrl) {
+                        URL.revokeObjectURL(currentObjectUrl);
+                    }
+                    
+                    currentObjectUrl = URL.createObjectURL(blob);
+                    const imgElement = document.getElementById('remoteImage');
+                    imgElement.src = currentObjectUrl;
+
+                    document.getElementById('center-overlay').style.display = 'none';
+                    document.getElementById('status-top').innerText = 'Трансляция активна';
+                    return;
+                }
+
+                try {
+                    const message = JSON.parse(event.data);
+
+                    if (message.type === 'joined-success') {
+                        document.getElementById('pc-name').innerText = message.agentName;
+                        document.getElementById('status-top').innerText = 'Агент найден';
+                        document.getElementById('overlay-msg').innerText = 'Готово к подключению';
+                        document.getElementById('main-action-btn').style.display = 'inline-block';
+                        document.getElementById('status-badge').innerText = 'Готов';
+
+                        if (sessionStorage.getItem('autoConnect') === 'true' && !isConnected) {
+                            document.getElementById('overlay-msg').innerText = 'Установка соединения...';
+                            ws.send(JSON.stringify({ type: 'start-stream' }));
+                            isConnected = true;
+                            screenContainer.classList.add('hide-cursor');
+                            document.getElementById('main-action-btn').innerText = 'Отключить';
+                            document.getElementById('status-badge').innerText = 'Подключено';
+                            document.getElementById('status-badge').style.background = '#d4edda';
+                            document.getElementById('status-badge').style.color = '#155724';
+                            startSessionTimer();
+                        }
+                    }
+
+                    if (message.type === 'disconnected') {
+                        resetInterface("Сессия завершена / разорвана");
+                    }
+                } catch (e) {
+                    console.error("Parse error:", e);
+                }
+            };
+        }
+
+        function toggleConnection() {
+            if (!isConnected) {
+                document.getElementById('overlay-msg').innerText = 'Установка соединения...';
+                ws.send(JSON.stringify({ type: 'start-stream' }));
+                isConnected = true;
+                screenContainer.classList.add('hide-cursor');
+                sessionStorage.setItem('autoConnect', 'true');
+                document.getElementById('main-action-btn').innerText = 'Отключить';
+                document.getElementById('status-badge').innerText = 'Подключено';
+                document.getElementById('status-badge').style.background = '#d4edda';
+                document.getElementById('status-badge').style.color = '#155724';
+                startSessionTimer();
+            } else {
+                disconnectSession();
+            }
+        }
+
+        function disconnectSession() {
+            sessionStorage.removeItem('autoConnect');
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'disconnect-session' }));
+            }
+            resetInterface("Соединение разорвано");
+        }
+
+        function resetInterface(msg) {
+            isConnected = false;
+            screenContainer.classList.remove('hide-cursor');
+            sessionStorage.removeItem('autoConnect');
+            stopSessionTimer();
+            
+            if (currentObjectUrl) {
+                URL.revokeObjectURL(currentObjectUrl);
+                currentObjectUrl = null;
+            }
+            document.getElementById('remoteImage').src = '';
+            document.getElementById('center-overlay').style.display = 'flex';
+            document.getElementById('overlay-msg').innerText = msg;
+            document.getElementById('main-action-btn').innerText = 'Подключить';
+            document.getElementById('status-badge').innerText = 'Ожидание';
+            document.getElementById('status-badge').style.background = '#e9ecef';
+            document.getElementById('status-badge').style.color = '#495057';
+        }
+
+        function toggleFullScreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                }
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>
