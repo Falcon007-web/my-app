@@ -155,14 +155,19 @@
         const token = urlParams.get('c');
         const isAgentMode = window.location.hash === '#agent';
 
-        // Qo'shimcha STUN serverlar kiritildi
+        // STUN va VPS TURN serverlar ulandi
         const rtcConfig = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
                 { urls: 'stun:stun1.l.google.com:19302' },
                 { urls: 'stun:stun2.l.google.com:19302' },
                 { urls: 'stun:stun3.l.google.com:19302' },
-                { urls: 'stun:stun4.l.google.com:19302' }
+                { urls: 'stun:stun4.l.google.com:19302' },
+                {
+                    urls: 'turn:138.124.71.22:3478',
+                    username: 'admin',
+                    credential: 'supersecret123'
+                }
             ]
         };
 
