@@ -70,12 +70,11 @@
             cursor: none !important;
         }
 
-        #remoteImage {
+        video {
             width: 100%;
             height: 100%;
             object-fit: contain;
             background: #000;
-            display: block;
         }
         #center-overlay {
             position: absolute;
@@ -105,6 +104,7 @@
         <button id="main-action-btn" class="connect-btn" onclick="toggleConnection()" style="display: none;">Подключить</button>
         <button id="status-badge" disabled style="background: #e9ecef; color: #495057; cursor: default;">Ожидание</button>
         
+        <!-- Qo'shilgan taymer elementi -->
         <span id="sessionTimer" style="margin-left: 10px; font-weight: bold; color: #333; background: #e2e6ea; padding: 6px 12px; border-radius: 4px; border: 1px solid #ced4da; font-size: 14px;">00:00:00</span>
 
         <button onclick="toggleFullScreen()" style="margin-left: auto;">Полноэкранный</button>
@@ -114,15 +114,18 @@
         <div id="center-overlay">
             <h2 id="overlay-msg" style="color: #fff;">Поиск агента на компьютере...</h2>
         </div>
-        <img id="remoteImage" alt="" />
+        <video id="remoteVideo" autoplay playsinline></video>
     </div>
 
     <script>
         const wsProtocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
         const wsUrl = wsProtocol + window.location.host;
         let ws;
+        let pc;
+        let localStream = null;
         let isConnected = false;
 
+        // Taymer uchun o'zgaruvchilar
         let timerInterval = null;
         let secondsElapsed = 0;
 
@@ -150,6 +153,11 @@
 
         const urlParams = new URLSearchParams(window.location.search);
         const token = urlParams.get('c');
+        const isAgentMode = window.location.hash === '#agent';
+
+        const rtcConfig = {
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        };
 
         const screenContainer = document.getElementById('screen-container');
 
@@ -198,64 +206,66 @@
             ws.send(JSON.stringify({ type: 'input', payload: { action: 'keyup', key: e.key, code: e.code } }));
         });
 
-        let currentObjectUrl = null;
-
         function init() {
             ws = new WebSocket(wsUrl);
-            ws.binaryType = 'arraybuffer'; // ArrayBuffer formatida qabul qilamiz
-
             ws.onopen = () => {
-                if (token) {
+                if (isAgentMode && token) {
+                    document.getElementById('pc-name').innerText = 'Агент активен в фоновом режиме';
+                    ws.send(JSON.stringify({ type: 'register-agent-token', token: token, hostname: "PC-" + Math.floor(Math.random()*9000+1000) }));
+                } else if (token) {
                     ws.send(JSON.stringify({ type: 'join-viewer', token: token }));
                 }
             };
 
             ws.onmessage = async (event) => {
-                // Binary rasm kelsa
-                if (event.data instanceof ArrayBuffer) {
-                    const blob = new Blob([event.data], { type: 'image/jpeg' });
-                    
-                    if (currentObjectUrl) {
-                        URL.revokeObjectURL(currentObjectUrl);
-                    }
-                    
-                    currentObjectUrl = URL.createObjectURL(blob);
-                    const imgElement = document.getElementById('remoteImage');
-                    imgElement.src = currentObjectUrl;
+                const message = JSON.parse(event.data);
 
-                    document.getElementById('center-overlay').style.display = 'none';
-                    document.getElementById('status-top').innerText = 'Трансляция активна';
-                    return;
+                if (message.type === 'joined-success') {
+                    document.getElementById('pc-name').innerText = message.agentName;
+                    document.getElementById('status-top').innerText = 'Агент найден';
+                    document.getElementById('overlay-msg').innerText = 'Готово к подключению';
+                    document.getElementById('main-action-btn').style.display = 'inline-block';
+                    document.getElementById('status-badge').innerText = 'Готов';
+
+                    if (sessionStorage.getItem('autoConnect') === 'true' && !isConnected) {
+                        document.getElementById('overlay-msg').innerText = 'Установка соединения...';
+                        setupPeer('viewer');
+                        ws.send(JSON.stringify({ type: 'start-stream' }));
+                        isConnected = true;
+                        screenContainer.classList.add('hide-cursor');
+                        document.getElementById('main-action-btn').innerText = 'Отключить';
+                        document.getElementById('status-badge').innerText = 'Подключено';
+                        document.getElementById('status-badge').style.background = '#d4edda';
+                        document.getElementById('status-badge').style.color = '#155724';
+                        startSessionTimer(); // Taymerni ishga tushirish
+                    }
                 }
 
-                try {
-                    const message = JSON.parse(event.data);
+                if (message.type === 'start-stream' && isAgentMode) {
+                    await startAgentSharing();
+                }
 
-                    if (message.type === 'joined-success') {
-                        document.getElementById('pc-name').innerText = message.agentName;
-                        document.getElementById('status-top').innerText = 'Агент найден';
-                        document.getElementById('overlay-msg').innerText = 'Готово к подключению';
-                        document.getElementById('main-action-btn').style.display = 'inline-block';
-                        document.getElementById('status-badge').innerText = 'Готов';
+                if (message.type === 'disconnected') {
+                    resetInterface("Сессия завершена / разорвана");
+                }
 
-                        if (sessionStorage.getItem('autoConnect') === 'true' && !isConnected) {
-                            document.getElementById('overlay-msg').innerText = 'Установка соединения...';
-                            ws.send(JSON.stringify({ type: 'start-stream' }));
-                            isConnected = true;
-                            screenContainer.classList.add('hide-cursor');
-                            document.getElementById('main-action-btn').innerText = 'Отключить';
-                            document.getElementById('status-badge').innerText = 'Подключено';
-                            document.getElementById('status-badge').style.background = '#d4edda';
-                            document.getElementById('status-badge').style.color = '#155724';
-                            startSessionTimer();
+                if (message.type === 'signal') {
+                    if (!pc) setupPeer(isAgentMode ? 'agent' : 'viewer');
+
+                    if (message.payload.sdp) {
+                        await pc.setRemoteDescription(new RTCSessionDescription(message.payload.sdp));
+                        if (message.payload.sdp.type === 'offer') {
+                            const answer = await pc.createAnswer();
+                            await pc.setLocalDescription(answer);
+                            ws.send(JSON.stringify({ type: 'signal', payload: { sdp: pc.localDescription } }));
+                        }
+                    } else if (message.payload.candidate) {
+                        try {
+                            await pc.addIceCandidate(new RTCIceCandidate(message.payload.candidate));
+                        } catch (e) {
+                            console.error('ICE error:', e);
                         }
                     }
-
-                    if (message.type === 'disconnected') {
-                        resetInterface("Сессия завершена / разорвана");
-                    }
-                } catch (e) {
-                    console.error("Parse error:", e);
                 }
             };
         }
@@ -263,6 +273,7 @@
         function toggleConnection() {
             if (!isConnected) {
                 document.getElementById('overlay-msg').innerText = 'Установка соединения...';
+                setupPeer('viewer');
                 ws.send(JSON.stringify({ type: 'start-stream' }));
                 isConnected = true;
                 screenContainer.classList.add('hide-cursor');
@@ -271,7 +282,7 @@
                 document.getElementById('status-badge').innerText = 'Подключено';
                 document.getElementById('status-badge').style.background = '#d4edda';
                 document.getElementById('status-badge').style.color = '#155724';
-                startSessionTimer();
+                startSessionTimer(); // Taymerni ishga tushirish
             } else {
                 disconnectSession();
             }
@@ -289,19 +300,89 @@
             isConnected = false;
             screenContainer.classList.remove('hide-cursor');
             sessionStorage.removeItem('autoConnect');
-            stopSessionTimer();
+            stopSessionTimer(); // Taymerni to'xtatish va nollash
             
-            if (currentObjectUrl) {
-                URL.revokeObjectURL(currentObjectUrl);
-                currentObjectUrl = null;
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
             }
-            document.getElementById('remoteImage').src = '';
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+
+            document.getElementById('remoteVideo').srcObject = null;
             document.getElementById('center-overlay').style.display = 'flex';
             document.getElementById('overlay-msg').innerText = msg;
             document.getElementById('main-action-btn').innerText = 'Подключить';
             document.getElementById('status-badge').innerText = 'Ожидание';
             document.getElementById('status-badge').style.background = '#e9ecef';
             document.getElementById('status-badge').style.color = '#495057';
+        }
+
+        async function startAgentSharing() {
+            try {
+                if (localStream) {
+                    localStream.getTracks().forEach(track => track.stop());
+                    localStream = null;
+                }
+
+                localStream = await navigator.mediaDevices.getDisplayMedia({ 
+                    video: { 
+                        cursor: "never",
+                        width: { ideal: 1920, max: 1920 },
+                        height: { ideal: 1080, max: 1080 },
+                        frameRate: { ideal: 30, max: 60 }
+                    }, 
+                    audio: false 
+                });
+
+                document.getElementById('center-overlay').style.display = 'none';
+
+                setupPeer('agent');
+                localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                ws.send(JSON.stringify({ type: 'signal', payload: { sdp: pc.localDescription } }));
+
+                localStream.getVideoTracks()[0].onended = () => {
+                    disconnectSession();
+                };
+            } catch (err) {
+                console.error('Screen capture error:', err.message);
+            }
+        }
+
+        function setupPeer(role) {
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+            pc = new RTCPeerConnection(rtcConfig);
+
+            if (role === 'viewer') {
+                pc.ontrack = (event) => {
+                    const videoElement = document.getElementById('remoteVideo');
+                    if (videoElement.srcObject !== event.streams[0]) {
+                        videoElement.srcObject = event.streams[0];
+                        document.getElementById('center-overlay').style.display = 'none';
+                        document.getElementById('status-top').innerText = 'Трансляция активна';
+                        
+                        startSessionTimer(); // Translyatsiya boshlanganda taymerni faollashtirish
+                        
+                        videoElement.play().catch(err => {
+                            console.log("Autoplay blocked, waiting for user interaction:", err);
+                        });
+                    }
+                };
+            }
+
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    ws.send(JSON.stringify({ type: 'signal', payload: { candidate: event.candidate } }));
+                }
+            };
         }
 
         function toggleFullScreen() {
