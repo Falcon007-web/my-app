@@ -10,7 +10,7 @@ const wss = new Server({ server });
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// token -> { agentWs, viewerWs, agentName }
+// token -> { agentWs, browserWs, viewerWs, agentName }
 const sessions = new Map();
 
 app.get('/sharing', (req, res) => {
@@ -21,16 +21,7 @@ wss.on('connection', (ws) => {
     ws.isAlive = true;
     ws.on('pong', () => { ws.isAlive = true; });
 
-    ws.on('message', (message, isBinary) => {
-        // 1. Agentdan kelgan Binary kadrni darhol Viewer (operator)ga yo'naltirish
-        if (isBinary) {
-            const session = sessions.get(ws.sessionToken);
-            if (session && session.viewerWs && ws.clientRole === 'agent') {
-                session.viewerWs.send(message, { binary: true });
-            }
-            return;
-        }
-
+    ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
 
@@ -39,7 +30,7 @@ wss.on('connection', (ws) => {
                 const token = uuidv4().replace(/-/g, '') + uuidv4().replace(/-/g, '');
                 const agentName = data.hostname || 'REMOTE-PC';
                 
-                sessions.set(token, { agentWs: ws, viewerWs: null, agentName: agentName });
+                sessions.set(token, { agentWs: ws, browserWs: null, viewerWs: null, agentName: agentName });
                 ws.sessionToken = token;
                 ws.clientRole = 'agent';
 
@@ -60,7 +51,7 @@ wss.on('connection', (ws) => {
             if (data.type === 'register-agent-back') {
                 let session = sessions.get(data.token);
                 if (!session) {
-                    session = { agentWs: ws, viewerWs: null, agentName: data.hostname || 'REMOTE-PC' };
+                    session = { agentWs: ws, browserWs: null, viewerWs: null, agentName: data.hostname || 'REMOTE-PC' };
                     sessions.set(data.token, session);
                 } else {
                     session.agentWs = ws;
@@ -81,6 +72,31 @@ wss.on('connection', (ws) => {
                     type: 'registered',
                     sharingUrl: sharingUrl
                 }));
+
+                if (session.browserWs) {
+                    session.browserWs.send(JSON.stringify({ type: 'start-stream' }));
+                }
+            }
+
+            // 2. Puppeteer Brauzer ulanishi (WebRTC uchun)
+            if (data.type === 'register-agent-token') {
+                let session = sessions.get(data.token);
+                if (session) {
+                    session.browserWs = ws;
+                    ws.sessionToken = data.token;
+                    ws.clientRole = 'browser';
+                    if (data.hostname) session.agentName = data.hostname;
+
+                    if (session.viewerWs) {
+                        session.viewerWs.send(JSON.stringify({ 
+                            type: 'joined-success', 
+                            agentName: session.agentName 
+                        }));
+                        ws.send(JSON.stringify({ type: 'start-stream' }));
+                    }
+                } else {
+                    ws.send(JSON.stringify({ type: 'error', message: 'Session expired!' }));
+                }
             }
 
             // 3. Viewer (Operator) ulanishi
@@ -101,12 +117,12 @@ wss.on('connection', (ws) => {
                 }
             }
 
-            // 4. Stream boshlash (TO'G'RILANGAN QISM: signal to'g'ri agentWs ga boradi)
+            // 4. Stream boshlash
             if (data.type === 'start-stream') {
                 const session = sessions.get(ws.sessionToken);
-                if (session && session.agentWs) {
+                if (session && session.browserWs) {
                     session.viewerWs = ws;
-                    session.agentWs.send(JSON.stringify({ type: 'start-stream' }));
+                    session.browserWs.send(JSON.stringify({ type: 'start-stream' }));
                     console.log(`[STREAM] Boshlandi: ${session.agentName}`);
                 }
             }
@@ -115,11 +131,20 @@ wss.on('connection', (ws) => {
             if (data.type === 'disconnect-session') {
                 const session = sessions.get(ws.sessionToken);
                 if (session && session.viewerWs === ws) {
-                    if (session.agentWs) {
-                        session.agentWs.send(JSON.stringify({ type: 'disconnected' }));
-                    }
                     session.viewerWs = null;
                     console.log(`[OPERATOR CHIQDI] Kompyuter: ${session.agentName}`);
+                }
+            }
+
+            // 6. WebRTC Signallar
+            if (data.type === 'signal') {
+                const session = sessions.get(ws.sessionToken);
+                if (session) {
+                    if (ws.clientRole === 'viewer' && session.browserWs) {
+                        session.browserWs.send(JSON.stringify({ type: 'signal', payload: data.payload }));
+                    } else if (ws.clientRole === 'browser' && session.viewerWs) {
+                        session.viewerWs.send(JSON.stringify({ type: 'signal', payload: data.payload }));
+                    }
                 }
             }
 
@@ -136,10 +161,12 @@ wss.on('connection', (ws) => {
     });
 
     ws.on('close', () => {
-        sessions.forEach((session) => {
+        sessions.forEach((session, token) => {
             if (session.agentWs === ws) {
                 session.agentWs = null;
                 console.log(`[AGENT UZILDI] Kompyuter: ${session.agentName} (Token saqlandi)`);
+            } else if (session.browserWs === ws) {
+                session.browserWs = null;
             } else if (session.viewerWs === ws) {
                 session.viewerWs = null;
             }
