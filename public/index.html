@@ -104,7 +104,6 @@
         <button id="main-action-btn" class="connect-btn" onclick="toggleConnection()" style="display: none;">Подключить</button>
         <button id="status-badge" disabled style="background: #e9ecef; color: #495057; cursor: default;">Ожидание</button>
         
-        <!-- Qo'shilgan taymer elementi -->
         <span id="sessionTimer" style="margin-left: 10px; font-weight: bold; color: #333; background: #e2e6ea; padding: 6px 12px; border-radius: 4px; border: 1px solid #ced4da; font-size: 14px;">00:00:00</span>
 
         <button onclick="toggleFullScreen()" style="margin-left: auto;">Полноэкранный</button>
@@ -122,10 +121,10 @@
         const wsUrl = wsProtocol + window.location.host;
         let ws;
         let pc;
+        let dataChannel;
         let localStream = null;
         let isConnected = false;
 
-        // Taymer uchun o'zgaruvchilar
         let timerInterval = null;
         let secondsElapsed = 0;
 
@@ -155,7 +154,6 @@
         const token = urlParams.get('c');
         const isAgentMode = window.location.hash === '#agent';
 
-        // STUN va VPS TURN serverlar ulandi
         const rtcConfig = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
@@ -177,8 +175,14 @@
         let lastMouseY = 0;
         let mouseMoveScheduled = false;
 
+        function sendInput(data) {
+            if (dataChannel && dataChannel.readyState === 'open') {
+                dataChannel.send(JSON.stringify(data));
+            }
+        }
+
         screenContainer.addEventListener('mousemove', (e) => {
-            if (!isConnected || !ws || ws.readyState !== WebSocket.OPEN) return;
+            if (!isConnected) return;
             const rect = screenContainer.getBoundingClientRect();
             
             lastMouseX = (e.clientX - rect.left) / rect.width;
@@ -187,35 +191,32 @@
             if (!mouseMoveScheduled) {
                 mouseMoveScheduled = true;
                 requestAnimationFrame(() => {
-                    ws.send(JSON.stringify({ 
-                        type: 'input', 
-                        payload: { action: 'mousemove', x: lastMouseX, y: lastMouseY } 
-                    }));
+                    sendInput({ action: 'mousemove', x: lastMouseX, y: lastMouseY });
                     mouseMoveScheduled = false;
                 });
             }
         });
 
         screenContainer.addEventListener('mousedown', (e) => {
-            if (!isConnected || !ws || ws.readyState !== WebSocket.OPEN) return;
-            ws.send(JSON.stringify({ type: 'input', payload: { action: 'mousedown', button: e.button } }));
+            if (!isConnected) return;
+            sendInput({ action: 'mousedown', button: e.button });
         });
 
         screenContainer.addEventListener('mouseup', (e) => {
-            if (!isConnected || !ws || ws.readyState !== WebSocket.OPEN) return;
-            ws.send(JSON.stringify({ type: 'input', payload: { action: 'mouseup', button: e.button } }));
+            if (!isConnected) return;
+            sendInput({ action: 'mouseup', button: e.button });
         });
 
         screenContainer.addEventListener('contextmenu', (e) => e.preventDefault());
 
         window.addEventListener('keydown', (e) => {
-            if (!isConnected || !ws || ws.readyState !== WebSocket.OPEN) return;
-            ws.send(JSON.stringify({ type: 'input', payload: { action: 'keydown', key: e.key, code: e.code } }));
+            if (!isConnected) return;
+            sendInput({ action: 'keydown', key: e.key, code: e.code });
         });
 
         window.addEventListener('keyup', (e) => {
-            if (!isConnected || !ws || ws.readyState !== WebSocket.OPEN) return;
-            ws.send(JSON.stringify({ type: 'input', payload: { action: 'keyup', key: e.key, code: e.code } }));
+            if (!isConnected) return;
+            sendInput({ action: 'keyup', key: e.key, code: e.code });
         });
 
         function init() {
@@ -249,7 +250,7 @@
                         document.getElementById('status-badge').innerText = 'Подключено';
                         document.getElementById('status-badge').style.background = '#d4edda';
                         document.getElementById('status-badge').style.color = '#155724';
-                        startSessionTimer(); // Taymerni ishga tushirish
+                        startSessionTimer();
                     }
                 }
 
@@ -294,7 +295,7 @@
                 document.getElementById('status-badge').innerText = 'Подключено';
                 document.getElementById('status-badge').style.background = '#d4edda';
                 document.getElementById('status-badge').style.color = '#155724';
-                startSessionTimer(); // Taymerni ishga tushirish
+                startSessionTimer();
             } else {
                 disconnectSession();
             }
@@ -312,11 +313,15 @@
             isConnected = false;
             screenContainer.classList.remove('hide-cursor');
             sessionStorage.removeItem('autoConnect');
-            stopSessionTimer(); // Taymerni to'xtatish va nollash
+            stopSessionTimer();
             
             if (localStream) {
                 localStream.getTracks().forEach(track => track.stop());
                 localStream = null;
+            }
+            if (dataChannel) {
+                dataChannel.close();
+                dataChannel = null;
             }
             if (pc) {
                 pc.close();
@@ -352,6 +357,11 @@
                 document.getElementById('center-overlay').style.display = 'none';
 
                 setupPeer('agent');
+                
+                // Agent DataChannel yaratadi (Unreliable & Unordered)
+                dataChannel = pc.createDataChannel("input-channel", { ordered: false, maxRetransmits: 0 });
+                dataChannel.onopen = () => console.log("DataChannel open on Agent!");
+
                 localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
                 const offer = await pc.createOffer();
@@ -374,6 +384,12 @@
             pc = new RTCPeerConnection(rtcConfig);
 
             if (role === 'viewer') {
+                // Viewer kelayotgan DataChannel ni qabul qiladi
+                pc.ondatachannel = (event) => {
+                    dataChannel = event.channel;
+                    dataChannel.onopen = () => console.log("DataChannel open on Viewer!");
+                };
+
                 pc.ontrack = (event) => {
                     const videoElement = document.getElementById('remoteVideo');
                     if (videoElement.srcObject !== event.streams[0]) {
@@ -381,10 +397,10 @@
                         document.getElementById('center-overlay').style.display = 'none';
                         document.getElementById('status-top').innerText = 'Трансляция активна';
                         
-                        startSessionTimer(); // Translyatsiya boshlanganda taymerni faollashtirish
+                        startSessionTimer();
                         
                         videoElement.play().catch(err => {
-                            console.log("Autoplay blocked, waiting for user interaction:", err);
+                            console.log("Autoplay blocked:", err);
                         });
                     }
                 };
