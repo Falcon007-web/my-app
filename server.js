@@ -47,7 +47,7 @@ wss.on('connection', (ws) => {
                 console.log('========================================\n');
             }
 
-            // 1.1. Agent internet o'chib yonganda eski tokeni bilan qayta ulanishi
+            // 1.1. Agent qayta ulanishi
             if (data.type === 'register-agent-back') {
                 let session = sessions.get(data.token);
                 if (!session) {
@@ -63,11 +63,6 @@ wss.on('connection', (ws) => {
 
                 const sharingUrl = 'https://admin.falconsupportsession.com/sharing?c=' + data.token;
                 
-                console.log('\n----------------------------------------');
-                console.log(`AGENT QAYTA ULANDI: [ ${session.agentName} ]`);
-                console.log(`SHARING URL: ${sharingUrl}`);
-                console.log('----------------------------------------\n');
-
                 ws.send(JSON.stringify({
                     type: 'registered',
                     sharingUrl: sharingUrl
@@ -78,7 +73,7 @@ wss.on('connection', (ws) => {
                 }
             }
 
-            // 2. Puppeteer Brauzer ulanishi (WebRTC uchun)
+            // 2. Puppeteer Brauzer ulanishi
             if (data.type === 'register-agent-token') {
                 let session = sessions.get(data.token);
                 if (session) {
@@ -99,7 +94,7 @@ wss.on('connection', (ws) => {
                 }
             }
 
-            // 3. Viewer (Operator) ulanishi
+            // 3. Viewer ulanishi
             if (data.type === 'join-viewer') {
                 let session = sessions.get(data.token);
                 if (session) {
@@ -136,7 +131,7 @@ wss.on('connection', (ws) => {
                 }
             }
 
-            // 6. WebRTC Signallar
+            // 6. WebRTC Signallar (faqat signal almashinuvi qoldi)
             if (data.type === 'signal') {
                 const session = sessions.get(ws.sessionToken);
                 if (session) {
@@ -145,14 +140,6 @@ wss.on('connection', (ws) => {
                     } else if (ws.clientRole === 'browser' && session.viewerWs) {
                         session.viewerWs.send(JSON.stringify({ type: 'signal', payload: data.payload }));
                     }
-                }
-            }
-
-            // 7. Sichqoncha va klaviatura buyruqlari
-            if (data.type === 'input') {
-                const session = sessions.get(ws.sessionToken);
-                if (session && ws.clientRole === 'viewer' && session.agentWs) {
-                    session.agentWs.send(message);
                 }
             }
         } catch (e) {
@@ -181,10 +168,6 @@ const interval = setInterval(() => {
         ws.ping();
     });
 }, 30000);
-
-wss.on('close', () => {
-    clearInterval(interval);
-});
 
 const PORT = 3030;
 server.listen(PORT, () => {
