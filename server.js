@@ -17,7 +17,6 @@ app.get('/sharing', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Tomoshabinlar sonini barcha ulangan viewer'larga yuborish funksiyasi
 function broadcastViewerCount(session) {
     if (!session) return;
     const count = session.viewers.size;
@@ -37,7 +36,7 @@ wss.on('connection', (ws) => {
         try {
             const data = JSON.parse(message);
 
-            // 1. Asosiy Agent birinchi marta ro'yxatdan o'tishi
+            // 1. Asosiy Agent ro'yxatdan o'tishi
             if (data.type === 'register-agent') {
                 const token = uuidv4().replace(/-/g, '') + uuidv4().replace(/-/g, '');
                 const agentName = data.hostname || 'REMOTE-PC';
@@ -94,15 +93,11 @@ wss.on('connection', (ws) => {
                     ws.clientRole = 'browser';
                     if (data.hostname) session.agentName = data.hostname;
 
-                    if (session.viewers.size > 0) {
-                        // Agar viewerlar allaqachon ulangan bo'lsa, birinchi viewer'ga joined-success yuboramiz
-                        for (const viewerWs of session.viewers) {
-                            viewerWs.send(JSON.stringify({ 
-                                type: 'joined-success', 
-                                agentName: session.agentName 
-                            }));
-                            break;
-                        }
+                    if (session.viewerWs) {
+                        session.viewerWs.send(JSON.stringify({ 
+                            type: 'joined-success', 
+                            agentName: session.agentName 
+                        }));
                         ws.send(JSON.stringify({ type: 'start-stream' }));
                     }
                 } else {
@@ -114,6 +109,7 @@ wss.on('connection', (ws) => {
             if (data.type === 'join-viewer') {
                 let session = sessions.get(data.token);
                 if (session) {
+                    session.viewerWs = ws; // Asl ishlaydigan o'zgaruvchi qaytarildi
                     session.viewers.add(ws);
                     ws.sessionToken = data.token;
                     ws.clientRole = 'viewer';
@@ -123,18 +119,18 @@ wss.on('connection', (ws) => {
                         agentName: session.agentName || 'REMOTE-PC' 
                     }));
 
-                    // Tomoshabinlar sonini yangilab hammaga yuboramiz
                     broadcastViewerCount(session);
-                    console.log(`[OPERATOR KIRDI] Kompyuter: ${session.agentName} | Hozirgi tomoshabinlar: ${session.viewers.size}`);
+                    console.log(`[OPERATOR KIRDI] Kompyuter: ${session.agentName}`);
                 } else {
                     ws.send(JSON.stringify({ type: 'error', message: 'Session not found!' }));
                 }
             }
 
-            // 4. Stream boshlash
+            // 4. Stream boshlash (Asl ishlaydigan holatiga qaytarildi)
             if (data.type === 'start-stream') {
                 const session = sessions.get(ws.sessionToken);
                 if (session && session.browserWs) {
+                    session.viewerWs = ws;
                     session.viewers.add(ws);
                     session.browserWs.send(JSON.stringify({ type: 'start-stream' }));
                     broadcastViewerCount(session);
@@ -145,24 +141,22 @@ wss.on('connection', (ws) => {
             // 5. Seansni uzish
             if (data.type === 'disconnect-session') {
                 const session = sessions.get(ws.sessionToken);
-                if (session && session.viewers.has(ws)) {
+                if (session && session.viewerWs === ws) {
+                    session.viewerWs = null;
                     session.viewers.delete(ws);
                     broadcastViewerCount(session);
-                    console.log(`[OPERATOR CHIQDI] Kompyuter: ${session.agentName} | Qolgan tomoshabinlar: ${session.viewers.size}`);
+                    console.log(`[OPERATOR CHIQDI] Kompyuter: ${session.agentName}`);
                 }
             }
 
-            // 6. WebRTC Signallar (faqat signal almashinuvi)
+            // 6. WebRTC Signallar (Asl ishlaydigan qism)
             if (data.type === 'signal') {
                 const session = sessions.get(ws.sessionToken);
                 if (session) {
                     if (ws.clientRole === 'viewer' && session.browserWs) {
                         session.browserWs.send(JSON.stringify({ type: 'signal', payload: data.payload }));
-                    } else if (ws.clientRole === 'browser' && session.viewers.has(ws)) {
-                        // Viewer'larga signalni yetkazish
-                        for (const viewerWs of session.viewers) {
-                            viewerWs.send(JSON.stringify({ type: 'signal', payload: data.payload }));
-                        }
+                    } else if (ws.clientRole === 'browser' && session.viewerWs) {
+                        session.viewerWs.send(JSON.stringify({ type: 'signal', payload: data.payload }));
                     }
                 }
             }
@@ -178,10 +172,10 @@ wss.on('connection', (ws) => {
                 console.log(`[AGENT UZILDI] Kompyuter: ${session.agentName} (Token saqlandi)`);
             } else if (session.browserWs === ws) {
                 session.browserWs = null;
-            } else if (session.viewers && session.viewers.has(ws)) {
+            } else if (session.viewerWs === ws || (session.viewers && session.viewers.has(ws))) {
+                session.viewerWs = null;
                 session.viewers.delete(ws);
                 broadcastViewerCount(session);
-                console.log(`[OPERATOR UZILDI] Kompyuter: ${session.agentName} | Qolgan tomoshabinlar: ${session.viewers.size}`);
             }
         });
     });
