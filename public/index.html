@@ -17,7 +17,7 @@
         }
         header {
             background: #2c2c2c;
-            padding: 10px 20px;
+            padding: 8px 15px;
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -26,16 +26,16 @@
         .pc-title {
             background: #e9ecef;
             color: #000;
-            padding: 10px 20px;
-            font-size: 20px;
+            padding: 8px 15px;
+            font-size: 18px;
             font-weight: bold;
             border-bottom: 1px solid #ccc;
         }
         .toolbar {
             background: #f8f9fa;
-            padding: 8px 15px;
+            padding: 5px 12px;
             display: flex;
-            gap: 10px;
+            gap: 8px;
             align-items: center;
             border-bottom: 1px solid #ddd;
         }
@@ -43,8 +43,8 @@
             background: #e2e6ea;
             color: #333;
             border: 1px solid #ced4da;
-            padding: 6px 14px;
-            font-size: 14px;
+            padding: 4px 10px;
+            font-size: 13px;
             border-radius: 4px;
             cursor: pointer;
             font-weight: bold;
@@ -63,10 +63,6 @@
             width: 100%;
             height: 100%;
             overflow: hidden;
-            cursor: default;
-        }
-
-        #screen-container.hide-cursor {
             cursor: none !important;
         }
 
@@ -75,6 +71,7 @@
             height: 100%;
             object-fit: contain;
             background: #000;
+            cursor: none !important;
         }
         #center-overlay {
             position: absolute;
@@ -93,27 +90,34 @@
 <body>
 
     <header>
-        <h3 style="margin:0; color:#fff;">Admin Tools <span style="font-size: 12px; color: #aaa;">In God We trust!</span></h3>
-        <div id="status-top" style="color: #28a745; font-weight: bold;">Ожидание агента...</div>
+        <h3 style="margin:0; color:#fff; font-size: 16px;">Admin Tools <span style="font-size: 11px; color: #aaa;">In God We trust!</span></h3>
+        <div id="status-top" style="color: #28a745; font-weight: bold; font-size: 13px;">Ожидание агента...</div>
     </header>
 
     <div class="pc-title" id="pc-name">Загрузка имени ПК...</div>
 
     <div class="toolbar">
-        <button class="disconnect-btn" onclick="disconnectSession()">Разъединить</button>
         <button id="main-action-btn" class="connect-btn" onclick="toggleConnection()" style="display: none;">Подключить</button>
-        <button id="status-badge" disabled style="background: #e9ecef; color: #495057; cursor: default;">Ожидание</button>
+        <button class="disconnect-btn" onclick="disconnectSession()">Разъединить</button>
         
-        <span id="sessionTimer" style="margin-left: 10px; font-weight: bold; color: #333; background: #e2e6ea; padding: 6px 12px; border-radius: 4px; border: 1px solid #ced4da; font-size: 14px;">00:00:00</span>
+        <span id="sessionTimer" style="font-weight: bold; color: #333; background: #e2e6ea; padding: 4px 8px; border-radius: 4px; border: 1px solid #ced4da; font-size: 13px;">00:00:00</span>
+        <span id="viewerCount" style="font-weight: bold; color: #333; background: #e2e6ea; padding: 4px 8px; border-radius: 4px; border: 1px solid #ced4da; font-size: 13px;">Смотрят: 1</span>
 
         <button onclick="toggleFullScreen()" style="margin-left: auto;">Полноэкранный</button>
     </div>
 
     <div id="screen-container">
         <div id="center-overlay">
-            <h2 id="overlay-msg" style="color: #fff;">Поиск агента на компьютере...</h2>
+            <h2 id="overlay-msg" style="color: #fff; font-size: 20px;">Поиск агента на компьютере...</h2>
         </div>
         <video id="remoteVideo" autoplay playsinline></video>
+        
+        <!-- Kattalashtirilgan qizil kursor -->
+        <div id="virtual-cursor" style="position: absolute; pointer-events: none; display: none; z-index: 1000; transform: translate(-2px, -2px);">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="#ff4757" stroke="#ffffff" stroke-width="2">
+                <polygon points="3,2 3,21 9,15 17,22 20,19 12,12 18,12" />
+            </svg>
+        </div>
     </div>
 
     <script>
@@ -161,7 +165,7 @@
                 { urls: 'stun:stun2.l.google.com:19302' },
                 { urls: 'stun:stun3.l.google.com:19302' },
                 { urls: 'stun:stun4.l.google.com:19302' },
-                { urls: 'stun:stun.services.mozilla.com' }, // <-- Mozilla STUN serveri qo'shildi
+                { urls: 'stun:stun.services.mozilla.com' },
                 {
                     urls: 'turn:138.124.71.22:3478',
                     username: 'admin',
@@ -171,6 +175,7 @@
         };
 
         const screenContainer = document.getElementById('screen-container');
+        const virtualCursor = document.getElementById('virtual-cursor');
 
         let lastMouseX = 0;
         let lastMouseY = 0;
@@ -188,6 +193,10 @@
             
             lastMouseX = (e.clientX - rect.left) / rect.width;
             lastMouseY = (e.clientY - rect.top) / rect.height;
+
+            virtualCursor.style.display = 'block';
+            virtualCursor.style.left = (e.clientX - rect.left) + 'px';
+            virtualCursor.style.top = (e.clientY - rect.top) + 'px';
 
             if (!mouseMoveScheduled) {
                 mouseMoveScheduled = true;
@@ -238,21 +247,25 @@
                     document.getElementById('pc-name').innerText = message.agentName;
                     document.getElementById('status-top').innerText = 'Агент найден';
                     document.getElementById('overlay-msg').innerText = 'Готово к подключению';
-                    document.getElementById('main-action-btn').style.display = 'inline-block';
-                    document.getElementById('status-badge').innerText = 'Готов';
+                    const mainBtn = document.getElementById('main-action-btn');
+                    mainBtn.style.display = 'inline-block';
+                    mainBtn.innerText = 'Подключить';
 
                     if (sessionStorage.getItem('autoConnect') === 'true' && !isConnected) {
                         document.getElementById('overlay-msg').innerText = 'Установка соединения...';
                         setupPeer('viewer');
                         ws.send(JSON.stringify({ type: 'start-stream' }));
                         isConnected = true;
-                        screenContainer.classList.add('hide-cursor');
-                        document.getElementById('main-action-btn').innerText = 'Отключить';
-                        document.getElementById('status-badge').innerText = 'Подключено';
-                        document.getElementById('status-badge').style.background = '#d4edda';
-                        document.getElementById('status-badge').style.color = '#155724';
+                        virtualCursor.style.display = 'block';
+                        mainBtn.innerText = 'Отключить';
+                        mainBtn.className = 'disconnect-btn';
                         startSessionTimer();
                     }
+                }
+
+                // Tomoshabinlar sonini yangilash
+                if (message.type === 'viewer-count') {
+                    document.getElementById('viewerCount').innerText = `Смотрят: ${message.count}`;
                 }
 
                 if (message.type === 'start-stream' && isAgentMode) {
@@ -285,17 +298,16 @@
         }
 
         function toggleConnection() {
+            const mainBtn = document.getElementById('main-action-btn');
             if (!isConnected) {
                 document.getElementById('overlay-msg').innerText = 'Установка соединения...';
                 setupPeer('viewer');
                 ws.send(JSON.stringify({ type: 'start-stream' }));
                 isConnected = true;
-                screenContainer.classList.add('hide-cursor');
+                virtualCursor.style.display = 'block';
                 sessionStorage.setItem('autoConnect', 'true');
-                document.getElementById('main-action-btn').innerText = 'Отключить';
-                document.getElementById('status-badge').innerText = 'Подключено';
-                document.getElementById('status-badge').style.background = '#d4edda';
-                document.getElementById('status-badge').style.color = '#155724';
+                mainBtn.innerText = 'Отключить';
+                mainBtn.className = 'disconnect-btn';
                 startSessionTimer();
             } else {
                 disconnectSession();
@@ -312,7 +324,7 @@
 
         function resetInterface(msg) {
             isConnected = false;
-            screenContainer.classList.remove('hide-cursor');
+            virtualCursor.style.display = 'none';
             sessionStorage.removeItem('autoConnect');
             stopSessionTimer();
             
@@ -332,10 +344,9 @@
             document.getElementById('remoteVideo').srcObject = null;
             document.getElementById('center-overlay').style.display = 'flex';
             document.getElementById('overlay-msg').innerText = msg;
-            document.getElementById('main-action-btn').innerText = 'Подключить';
-            document.getElementById('status-badge').innerText = 'Ожидание';
-            document.getElementById('status-badge').style.background = '#e9ecef';
-            document.getElementById('status-badge').style.color = '#495057';
+            const mainBtn = document.getElementById('main-action-btn');
+            mainBtn.innerText = 'Подключить';
+            mainBtn.className = 'connect-btn';
         }
 
         async function startAgentSharing() {
@@ -393,6 +404,7 @@
                     const videoElement = document.getElementById('remoteVideo');
                     if (videoElement.srcObject !== event.streams[0]) {
                         videoElement.srcObject = event.streams[0];
+                        document.getElementById('center-editor') // safe
                         document.getElementById('center-overlay').style.display = 'none';
                         document.getElementById('status-top').innerText = 'Трансляция активна';
                         
