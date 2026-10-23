@@ -10,12 +10,24 @@ const wss = new Server({ server });
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// token -> { agentWs, browserWs, viewerWs, agentName }
+// token -> { agentWs, browserWs, viewers: Set(), agentName }
 const sessions = new Map();
 
 app.get('/sharing', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
+
+// Tomoshabinlar sonini barcha ulangan viewer'larga yuborish funksiyasi
+function broadcastViewerCount(session) {
+    if (!session) return;
+    const count = session.viewers.size;
+    const message = JSON.stringify({ type: 'viewer-count', count: count });
+    for (const viewerWs of session.viewers) {
+        if (viewerWs.readyState === viewerWs.OPEN) {
+            viewerWs.send(message);
+        }
+    }
+}
 
 wss.on('connection', (ws) => {
     ws.isAlive = true;
@@ -30,7 +42,7 @@ wss.on('connection', (ws) => {
                 const token = uuidv4().replace(/-/g, '') + uuidv4().replace(/-/g, '');
                 const agentName = data.hostname || 'REMOTE-PC';
                 
-                sessions.set(token, { agentWs: ws, browserWs: null, viewerWs: null, agentName: agentName });
+                sessions.set(token, { agentWs: ws, browserWs: null, viewers: new Set(), agentName: agentName });
                 ws.sessionToken = token;
                 ws.clientRole = 'agent';
 
@@ -51,7 +63,7 @@ wss.on('connection', (ws) => {
             if (data.type === 'register-agent-back') {
                 let session = sessions.get(data.token);
                 if (!session) {
-                    session = { agentWs: ws, browserWs: null, viewerWs: null, agentName: data.hostname || 'REMOTE-PC' };
+                    session = { agentWs: ws, browserWs: null, viewers: new Set(), agentName: data.hostname || 'REMOTE-PC' };
                     sessions.set(data.token, session);
                 } else {
                     session.agentWs = ws;
@@ -82,11 +94,15 @@ wss.on('connection', (ws) => {
                     ws.clientRole = 'browser';
                     if (data.hostname) session.agentName = data.hostname;
 
-                    if (session.viewerWs) {
-                        session.viewerWs.send(JSON.stringify({ 
-                            type: 'joined-success', 
-                            agentName: session.agentName 
-                        }));
+                    if (session.viewers.size > 0) {
+                        // Agar viewerlar allaqachon ulangan bo'lsa, birinchi viewer'ga joined-success yuboramiz
+                        for (const viewerWs of session.viewers) {
+                            viewerWs.send(JSON.stringify({ 
+                                type: 'joined-success', 
+                                agentName: session.agentName 
+                            }));
+                            break;
+                        }
                         ws.send(JSON.stringify({ type: 'start-stream' }));
                     }
                 } else {
@@ -98,7 +114,7 @@ wss.on('connection', (ws) => {
             if (data.type === 'join-viewer') {
                 let session = sessions.get(data.token);
                 if (session) {
-                    session.viewerWs = ws;
+                    session.viewers.add(ws);
                     ws.sessionToken = data.token;
                     ws.clientRole = 'viewer';
                     
@@ -106,7 +122,10 @@ wss.on('connection', (ws) => {
                         type: 'joined-success', 
                         agentName: session.agentName || 'REMOTE-PC' 
                     }));
-                    console.log(`[OPERATOR KIRDI] Kompyuter: ${session.agentName}`);
+
+                    // Tomoshabinlar sonini yangilab hammaga yuboramiz
+                    broadcastViewerCount(session);
+                    console.log(`[OPERATOR KIRDI] Kompyuter: ${session.agentName} | Hozirgi tomoshabinlar: ${session.viewers.size}`);
                 } else {
                     ws.send(JSON.stringify({ type: 'error', message: 'Session not found!' }));
                 }
@@ -116,8 +135,9 @@ wss.on('connection', (ws) => {
             if (data.type === 'start-stream') {
                 const session = sessions.get(ws.sessionToken);
                 if (session && session.browserWs) {
-                    session.viewerWs = ws;
+                    session.viewers.add(ws);
                     session.browserWs.send(JSON.stringify({ type: 'start-stream' }));
+                    broadcastViewerCount(session);
                     console.log(`[STREAM] Boshlandi: ${session.agentName}`);
                 }
             }
@@ -125,20 +145,24 @@ wss.on('connection', (ws) => {
             // 5. Seansni uzish
             if (data.type === 'disconnect-session') {
                 const session = sessions.get(ws.sessionToken);
-                if (session && session.viewerWs === ws) {
-                    session.viewerWs = null;
-                    console.log(`[OPERATOR CHIQDI] Kompyuter: ${session.agentName}`);
+                if (session && session.viewers.has(ws)) {
+                    session.viewers.delete(ws);
+                    broadcastViewerCount(session);
+                    console.log(`[OPERATOR CHIQDI] Kompyuter: ${session.agentName} | Qolgan tomoshabinlar: ${session.viewers.size}`);
                 }
             }
 
-            // 6. WebRTC Signallar (faqat signal almashinuvi qoldi)
+            // 6. WebRTC Signallar (faqat signal almashinuvi)
             if (data.type === 'signal') {
                 const session = sessions.get(ws.sessionToken);
                 if (session) {
                     if (ws.clientRole === 'viewer' && session.browserWs) {
                         session.browserWs.send(JSON.stringify({ type: 'signal', payload: data.payload }));
-                    } else if (ws.clientRole === 'browser' && session.viewerWs) {
-                        session.viewerWs.send(JSON.stringify({ type: 'signal', payload: data.payload }));
+                    } else if (ws.clientRole === 'browser' && session.viewers.has(ws)) {
+                        // Viewer'larga signalni yetkazish
+                        for (const viewerWs of session.viewers) {
+                            viewerWs.send(JSON.stringify({ type: 'signal', payload: data.payload }));
+                        }
                     }
                 }
             }
@@ -154,8 +178,10 @@ wss.on('connection', (ws) => {
                 console.log(`[AGENT UZILDI] Kompyuter: ${session.agentName} (Token saqlandi)`);
             } else if (session.browserWs === ws) {
                 session.browserWs = null;
-            } else if (session.viewerWs === ws) {
-                session.viewerWs = null;
+            } else if (session.viewers && session.viewers.has(ws)) {
+                session.viewers.delete(ws);
+                broadcastViewerCount(session);
+                console.log(`[OPERATOR UZILDI] Kompyuter: ${session.agentName} | Qolgan tomoshabinlar: ${session.viewers.size}`);
             }
         });
     });
