@@ -63,10 +63,7 @@
             width: 100%;
             height: 100%;
             overflow: hidden;
-            cursor: default;
-        }
-
-        #screen-container.hide-cursor {
+            /* Asl kursor to'liq yashiriladi */
             cursor: none !important;
         }
 
@@ -75,7 +72,9 @@
             height: 100%;
             object-fit: contain;
             background: #000;
+            cursor: none !important;
         }
+
         #center-overlay {
             position: absolute;
             display: flex;
@@ -115,8 +114,8 @@
         </div>
         <video id="remoteVideo" autoplay playsinline></video>
         
-        <!-- Kattalashtirilgan virtual kursor -->
-        <div id="virtual-cursor" style="position: absolute; pointer-events: none; display: none; z-index: 1000;">
+        <!-- Yagona kattalashtirilgan qizil kursor -->
+        <div id="virtual-cursor" style="position: absolute; pointer-events: none; display: none; z-index: 1000; transform: translate(-2px, -2px);">
             <svg width="32" height="32" viewBox="0 0 24 24" fill="#ff4757" stroke="#ffffff" stroke-width="2">
                 <polygon points="3,2 3,21 9,15 17,22 20,19 12,12 18,12" />
             </svg>
@@ -197,7 +196,7 @@
             lastMouseX = (e.clientX - rect.left) / rect.width;
             lastMouseY = (e.clientY - rect.top) / rect.height;
 
-            // Virtual kursorni ko'rsatish va siljitish
+            // Qizil kursorni operator mishkasi turgan joyga chiqaramiz
             virtualCursor.style.display = 'block';
             virtualCursor.style.left = (e.clientX - rect.left) + 'px';
             virtualCursor.style.top = (e.clientY - rect.top) + 'px';
@@ -259,7 +258,7 @@
                         setupPeer('viewer');
                         ws.send(JSON.stringify({ type: 'start-stream' }));
                         isConnected = true;
-                        screenContainer.classList.add('hide-cursor');
+                        virtualCursor.style.display = 'block';
                         document.getElementById('main-action-btn').innerText = 'Отключить';
                         document.getElementById('status-badge').innerText = 'Подключено';
                         document.getElementById('status-badge').style.background = '#d4edda';
@@ -303,7 +302,7 @@
                 setupPeer('viewer');
                 ws.send(JSON.stringify({ type: 'start-stream' }));
                 isConnected = true;
-                screenContainer.classList.add('hide-cursor');
+                virtualCursor.style.display = 'block';
                 sessionStorage.setItem('autoConnect', 'true');
                 document.getElementById('main-action-btn').innerText = 'Отключить';
                 document.getElementById('status-badge').innerText = 'Подключено';
@@ -325,8 +324,7 @@
 
         function resetInterface(msg) {
             isConnected = false;
-            screenContainer.classList.remove('hide-cursor');
-            virtualCursor.style.display = 'none'; // Ulanganda yoki uzilganda kursorni yashirish
+            virtualCursor.style.display = 'none';
             sessionStorage.removeItem('autoConnect');
             stopSessionTimer();
             
@@ -379,6 +377,7 @@
                 localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
                 const offer = await pc.createOffer();
+                await pc.setLowDescription(offer); // xavfsizlik uchun aslicha qoldirildi
                 await pc.setLocalDescription(offer);
                 ws.send(JSON.stringify({ type: 'signal', payload: { sdp: pc.localDescription } }));
 
