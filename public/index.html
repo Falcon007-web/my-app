@@ -63,6 +63,10 @@
             width: 100%;
             height: 100%;
             overflow: hidden;
+            cursor: default;
+        }
+
+        #screen-container.hide-cursor {
             cursor: none !important;
         }
 
@@ -71,7 +75,6 @@
             height: 100%;
             object-fit: contain;
             background: #000;
-            cursor: none !important;
         }
         #center-overlay {
             position: absolute;
@@ -111,13 +114,6 @@
             <h2 id="overlay-msg" style="color: #fff;">Поиск агента на компьютере...</h2>
         </div>
         <video id="remoteVideo" autoplay playsinline></video>
-        
-        <!-- Yagona katta qizil kursor -->
-        <div id="virtual-cursor" style="position: absolute; pointer-events: none; display: none; z-index: 1000; transform: translate(-2px, -2px);">
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="#ff4757" stroke="#ffffff" stroke-width="2">
-                <polygon points="3,2 3,21 9,15 17,22 20,19 12,12 18,12" />
-            </svg>
-        </div>
     </div>
 
     <script>
@@ -165,7 +161,7 @@
                 { urls: 'stun:stun2.l.google.com:19302' },
                 { urls: 'stun:stun3.l.google.com:19302' },
                 { urls: 'stun:stun4.l.google.com:19302' },
-                { urls: 'stun:stun.services.mozilla.com' },
+                { urls: 'stun:stun.services.mozilla.com' }, // <-- Mozilla STUN serveri qo'shildi
                 {
                     urls: 'turn:138.124.71.22:3478',
                     username: 'admin',
@@ -175,7 +171,6 @@
         };
 
         const screenContainer = document.getElementById('screen-container');
-        const virtualCursor = document.getElementById('virtual-cursor');
 
         let lastMouseX = 0;
         let lastMouseY = 0;
@@ -193,10 +188,6 @@
             
             lastMouseX = (e.clientX - rect.left) / rect.width;
             lastMouseY = (e.clientY - rect.top) / rect.height;
-
-            virtualCursor.style.display = 'block';
-            virtualCursor.style.left = (e.clientX - rect.left) + 'px';
-            virtualCursor.style.top = (e.clientY - rect.top) + 'px';
 
             if (!mouseMoveScheduled) {
                 mouseMoveScheduled = true;
@@ -255,7 +246,7 @@
                         setupPeer('viewer');
                         ws.send(JSON.stringify({ type: 'start-stream' }));
                         isConnected = true;
-                        virtualCursor.style.display = 'block';
+                        screenContainer.classList.add('hide-cursor');
                         document.getElementById('main-action-btn').innerText = 'Отключить';
                         document.getElementById('status-badge').innerText = 'Подключено';
                         document.getElementById('status-badge').style.background = '#d4edda';
@@ -299,7 +290,7 @@
                 setupPeer('viewer');
                 ws.send(JSON.stringify({ type: 'start-stream' }));
                 isConnected = true;
-                virtualCursor.style.display = 'block';
+                screenContainer.classList.add('hide-cursor');
                 sessionStorage.setItem('autoConnect', 'true');
                 document.getElementById('main-action-btn').innerText = 'Отключить';
                 document.getElementById('status-badge').innerText = 'Подключено';
@@ -321,7 +312,7 @@
 
         function resetInterface(msg) {
             isConnected = false;
-            virtualCursor.style.display = 'none';
+            screenContainer.classList.remove('hide-cursor');
             sessionStorage.removeItem('autoConnect');
             stopSessionTimer();
             
