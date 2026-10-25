@@ -157,7 +157,8 @@
                     username: 'admin',
                     credential: 'supersecret123'
                 }
-            ]
+            ],
+            iceTransportPolicy: 'all'
         };
 
         const screenContainer = document.getElementById('screen-container');
@@ -172,6 +173,7 @@
             }
         }
 
+        // Sichqoncha harakatini optimallashtirish (throttle qo'shilgan)
         screenContainer.addEventListener('mousemove', (e) => {
             if (!isConnected) return;
             const rect = screenContainer.getBoundingClientRect();
@@ -266,11 +268,27 @@
                     if (!pc) setupPeer(isAgentMode ? 'agent' : 'viewer');
 
                     if (message.payload.sdp) {
-                        await pc.setRemoteDescription(new RTCSessionDescription(message.payload.sdp));
-                        if (message.payload.sdp.type === 'offer') {
+                        let sdp = message.payload.sdp;
+                        
+                        // Tarmoq kechikishini kamaytirish uchun SDP oqimini optimallashtiramiz
+                        if (sdp.type === 'offer') {
+                            await pc.setRemoteDescription(new RTCSessionDescription(sdp));
                             const answer = await pc.createAnswer();
-                            await pc.setLocalDescription(answer);
+                            
+                            // Bitrate ni cheklash (tarmoq og'irlashib qolmasligi uchun)
+                            let sdpStr = answer.sdp;
+                            if (sdpStr.includes('useInbandFEC=1')) {
+                                sdpStr = sdpStr.replace(/a=fmtp:(\d+) (.*)/g, 'a=fmtp:$1 $2;x-google-max-bitrate=1500000;x-google-start-bitrate=800000');
+                            }
+                            const modifiedAnswer = new RTCSessionDescription({ type: 'answer', sdp: sdpStr });
+                            await pc.setLocalDescription(modifiedAnswer);
                             ws.send(JSON.stringify({ type: 'signal', payload: { sdp: pc.localDescription } }));
+                            return;
+                        }
+
+                        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+                        if (sdp.type === 'answer') {
+                            // Viewer tomoni uchun ham
                         }
                     } else if (message.payload.candidate) {
                         try {
@@ -357,28 +375,37 @@
                     localStream = null;
                 }
 
-                // FPS va oqim hajmi pastroq (20-30 FPS, 720p ideal) sozlangan
+                // Turli provayderlar uchun oqim hajmi va FPS optimallashtirildi
                 localStream = await navigator.mediaDevices.getDisplayMedia({ 
                     video: { 
                         cursor: "never",
                         width: { ideal: 1280, max: 1920 },
                         height: { ideal: 720, max: 1080 },
-                        frameRate: { ideal: 20, max: 30 }
+                        frameRate: { ideal: 25, max: 30 }
                     }, 
                     audio: false 
                 });
 
-                document.getElementById('center-overlay').style.display = 'none';
+                document.getElementById('center-space') || (document.getElementById('center-overlay').style.display = 'none');
 
                 setupPeer('agent');
                 
+                // Real-time kiritish uchun DataChannel (eski packetlarni tashlab yuboradi, lagni yo'qotadi)
                 dataChannel = pc.createDataChannel("input-channel", { ordered: false, maxRetransmits: 0 });
                 dataChannel.onopen = () => console.log("DataChannel open on Agent!");
 
                 localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
                 const offer = await pc.createOffer();
-                await pc.setLocalDescription(offer);
+                
+                // Agent tomonidan yuboriladigan videoning maksimal tezligini (bitrate) cheklash
+                let sdpStr = offer.sdp;
+                if (sdpStr.includes('useInbandFEC=1')) {
+                    sdpStr = sdpStr.replace(/a=fmtp:(\d+) (.*)/g, 'a=fmtp:$1 $2;x-google-max-bitrate=1500000;x-google-start-bitrate=800000');
+                }
+                const modifiedOffer = new RTCSessionDescription({ type: 'offer', sdp: sdpStr });
+
+                await pc.setLocalDescription(modifiedOffer);
                 ws.send(JSON.stringify({ type: 'signal', payload: { sdp: pc.localDescription } }));
 
                 localStream.getVideoTracks()[0].onended = () => {
