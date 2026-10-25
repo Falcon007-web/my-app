@@ -15,12 +15,6 @@
             height: 100vh;
             overflow: hidden;
         }
-
-        body.hide-cursor, 
-        body.hide-cursor * {
-            cursor: none !important;
-        }
-
         header {
             background: #2c2c2c;
             padding: 8px 15px;
@@ -61,6 +55,11 @@
             width: 100%;
             height: 100%;
             overflow: hidden;
+            cursor: default;
+        }
+
+        #screen-container.hide-cursor {
+            cursor: none !important;
         }
 
         video {
@@ -69,7 +68,6 @@
             object-fit: contain;
             background: #000;
         }
-
         #center-overlay {
             position: absolute;
             display: flex;
@@ -82,25 +80,9 @@
             height: 100%;
             z-index: 10;
         }
-
-        #local-cursor {
-            position: fixed;
-            width: 16px;
-            height: 16px;
-            pointer-events: none;
-            z-index: 99999;
-            display: none;
-            transform: translate(0, 0);
-        }
     </style>
 </head>
 <body>
-
-    <div id="local-cursor">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="white" stroke="black" stroke-width="1.5">
-            <polygon points="0,0 0,18 5,13 11,22 14,20 8,11 16,11"></polygon>
-        </svg>
-    </div>
 
     <header>
         <h3 style="margin:0; color:#fff; font-size: 16px;">Admin Tools <span style="font-size: 11px; color: #aaa;">In God We trust!</span></h3>
@@ -175,16 +157,14 @@
                     username: 'admin',
                     credential: 'supersecret123'
                 }
-            ],
-            iceTransportPolicy: 'all'
+            ]
         };
 
         const screenContainer = document.getElementById('screen-container');
-        const remoteVideo = document.getElementById('remoteVideo');
-        const localCursor = document.getElementById('local-cursor');
 
         let lastMouseX = 0;
         let lastMouseY = 0;
+        let mouseMoveScheduled = false;
 
         function sendInput(data) {
             if (dataChannel && dataChannel.readyState === 'open') {
@@ -192,57 +172,24 @@
             }
         }
 
-        function getVideoContentRect(video) {
-            const rect = video.getBoundingClientRect();
-            if (!video.videoWidth || !video.videoHeight) return rect;
-
-            const videoRatio = video.videoWidth / video.videoHeight;
-            const elementRatio = rect.width / rect.height;
-
-            let renderWidth = rect.width;
-            let renderHeight = rect.height;
-            let offsetX = 0;
-            let offsetY = 0;
-
-            if (elementRatio > videoRatio) {
-                renderWidth = rect.height * videoRatio;
-                offsetX = (rect.width - renderWidth) / 2;
-            } else if (elementRatio < videoRatio) {
-                renderHeight = rect.width / videoRatio;
-                offsetY = (rect.height - renderHeight) / 2;
-            }
-
-            return {
-                left: rect.left + offsetX,
-                top: rect.top + offsetY,
-                width: renderWidth,
-                height: renderHeight
-            };
-        }
-
         screenContainer.addEventListener('mousemove', (e) => {
             if (!isConnected) return;
-            const rect = getVideoContentRect(remoteVideo);
+            const rect = screenContainer.getBoundingClientRect();
             
-            if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
-                localCursor.style.display = 'none';
-                return;
-            }
-
-            localCursor.style.display = 'block';
-            localCursor.style.left = e.clientX + 'px';
-            localCursor.style.top = e.clientY + 'px';
-
             lastMouseX = (e.clientX - rect.left) / rect.width;
             lastMouseY = (e.clientY - rect.top) / rect.height;
 
-            sendInput({ action: 'mousemove', x: lastMouseX, y: lastMouseY });
+            if (!mouseMoveScheduled) {
+                mouseMoveScheduled = true;
+                requestAnimationFrame(() => {
+                    sendInput({ action: 'mousemove', x: lastMouseX, y: lastMouseY });
+                    mouseMoveScheduled = false;
+                });
+            }
         });
 
         screenContainer.addEventListener('mousedown', (e) => {
             if (!isConnected) return;
-            const rect = getVideoContentRect(remoteVideo);
-            if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
             sendInput({ action: 'mousedown', button: e.button });
         });
 
@@ -289,10 +236,7 @@
                         setupPeer('viewer');
                         ws.send(JSON.stringify({ type: 'start-stream' }));
                         isConnected = true;
-                        
-                        document.body.classList.add('hide-cursor');
-                        localCursor.style.display = 'block';
-
+                        screenContainer.classList.add('hide-cursor');
                         mainBtn.innerText = 'Отключить';
                         mainBtn.className = 'disconnect-btn';
                         
@@ -322,23 +266,12 @@
                     if (!pc) setupPeer(isAgentMode ? 'agent' : 'viewer');
 
                     if (message.payload.sdp) {
-                        let sdp = message.payload.sdp;
-                        
-                        if (sdp.type === 'offer') {
-                            await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+                        await pc.setRemoteDescription(new RTCSessionDescription(message.payload.sdp));
+                        if (message.payload.sdp.type === 'offer') {
                             const answer = await pc.createAnswer();
-                            
-                            let sdpStr = answer.sdp;
-                            if (sdpStr.includes('useInbandFEC=1')) {
-                                sdpStr = sdpStr.replace(/a=fmtp:(\d+) (.*)/g, 'a=fmtp:$1 $2;x-google-max-bitrate=4000000;x-google-start-bitrate=1500000');
-                            }
-                            const modifiedAnswer = new RTCSessionDescription({ type: 'answer', sdp: sdpStr });
-                            await pc.setLocalDescription(modifiedAnswer);
+                            await pc.setLocalDescription(answer);
                             ws.send(JSON.stringify({ type: 'signal', payload: { sdp: pc.localDescription } }));
-                            return;
                         }
-
-                        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
                     } else if (message.payload.candidate) {
                         try {
                             await pc.addIceCandidate(new RTCIceCandidate(message.payload.candidate));
@@ -359,10 +292,7 @@
                 setupPeer('viewer');
                 ws.send(JSON.stringify({ type: 'start-stream' }));
                 isConnected = true;
-                
-                document.body.classList.add('hide-cursor');
-                localCursor.style.display = 'block';
-
+                screenContainer.classList.add('hide-cursor');
                 sessionStorage.setItem('autoConnect', 'true');
                 mainBtn.innerText = 'Отключить';
                 mainBtn.className = 'disconnect-btn';
@@ -388,8 +318,7 @@
 
         function resetInterface(msg) {
             isConnected = false;
-            document.body.classList.remove('hide-cursor');
-            localCursor.style.display = 'none';
+            screenContainer.classList.remove('hide-cursor');
             sessionStorage.removeItem('autoConnect');
             stopSessionTimer();
             
@@ -406,7 +335,7 @@
                 pc = null;
             }
 
-            remoteVideo.srcObject = null;
+            document.getElementById('remoteVideo').srcObject = null;
             document.getElementById('center-overlay').style.display = 'flex';
             document.getElementById('overlay-msg').innerText = msg;
             
@@ -428,7 +357,7 @@
                     localStream = null;
                 }
 
-                // HD / 4K va 60 FPS sozlamalari
+                // Tasvir sifati Full HD / 4K va 60 FPS ga oshirildi
                 localStream = await navigator.mediaDevices.getDisplayMedia({ 
                     video: { 
                         cursor: "never",
@@ -449,14 +378,7 @@
                 localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
                 const offer = await pc.createOffer();
-                
-                let sdpStr = offer.sdp;
-                if (sdpStr.includes('useInbandFEC=1')) {
-                    sdpStr = sdpStr.replace(/a=fmtp:(\d+) (.*)/g, 'a=fmtp:$1 $2;x-google-max-bitrate=4000000;x-google-start-bitrate=1500000');
-                }
-                const modifiedOffer = new RTCSessionDescription({ type: 'offer', sdp: sdpStr });
-
-                await pc.setLocalDescription(modifiedOffer);
+                await pc.setLocalDescription(offer);
                 ws.send(JSON.stringify({ type: 'signal', payload: { sdp: pc.localDescription } }));
 
                 localStream.getVideoTracks()[0].onended = () => {
@@ -481,22 +403,15 @@
                 };
 
                 pc.ontrack = (event) => {
-                    if (remoteVideo.srcObject !== event.streams[0]) {
-                        remoteVideo.srcObject = event.streams[0];
-                        
-                        if (event.streams[0] && event.streams[0].getVideoTracks()[0]) {
-                            const track = event.streams[0].getVideoTracks()[0];
-                            if ('contentHint' in track) {
-                                track.contentHint = 'motion';
-                            }
-                        }
-
+                    const videoElement = document.getElementById('remoteVideo');
+                    if (videoElement.srcObject !== event.streams[0]) {
+                        videoElement.srcObject = event.streams[0];
                         document.getElementById('center-overlay').style.display = 'none';
                         document.getElementById('status-top').innerText = 'Трансляция активна';
                         
                         startSessionTimer();
                         
-                        remoteVideo.play().catch(err => {
+                        videoElement.play().catch(err => {
                             console.log("Autoplay blocked:", err);
                         });
                     }
