@@ -16,7 +16,6 @@
             overflow: hidden;
         }
 
-        /* Barcha oynada brauzer kursorini to'liq yashirish */
         body.hide-cursor, 
         body.hide-cursor * {
             cursor: none !important;
@@ -413,4 +412,115 @@
             
             const mainBtn = document.getElementById('main-action-btn');
             mainBtn.innerText = 'Подключить';
-            mainBtn.className = '
+            mainBtn.className = 'connect-btn';
+
+            const badge = document.getElementById('status-badge');
+            badge.innerText = 'Отключен';
+            badge.style.background = '#f8d7da';
+            badge.style.color = '#721c24';
+            badge.style.borderColor = '#f5c6cb';
+        }
+
+        async function startAgentSharing() {
+            try {
+                if (localStream) {
+                    localStream.getTracks().forEach(track => track.stop());
+                    localStream = null;
+                }
+
+                // HD / 4K va 60 FPS sozlamalari
+                localStream = await navigator.mediaDevices.getDisplayMedia({ 
+                    video: { 
+                        cursor: "never",
+                        width: { ideal: 1920, max: 3840 },
+                        height: { ideal: 1080, max: 2160 },
+                        frameRate: { ideal: 60, max: 60 }
+                    }, 
+                    audio: false 
+                });
+
+                document.getElementById('center-overlay').style.display = 'none';
+
+                setupPeer('agent');
+                
+                dataChannel = pc.createDataChannel("input-channel", { ordered: false, maxRetransmits: 0 });
+                dataChannel.onopen = () => console.log("DataChannel open on Agent!");
+
+                localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+                const offer = await pc.createOffer();
+                
+                let sdpStr = offer.sdp;
+                if (sdpStr.includes('useInbandFEC=1')) {
+                    sdpStr = sdpStr.replace(/a=fmtp:(\d+) (.*)/g, 'a=fmtp:$1 $2;x-google-max-bitrate=4000000;x-google-start-bitrate=1500000');
+                }
+                const modifiedOffer = new RTCSessionDescription({ type: 'offer', sdp: sdpStr });
+
+                await pc.setLocalDescription(modifiedOffer);
+                ws.send(JSON.stringify({ type: 'signal', payload: { sdp: pc.localDescription } }));
+
+                localStream.getVideoTracks()[0].onended = () => {
+                    disconnectSession();
+                };
+            } catch (err) {
+                console.error('Screen capture error:', err.message);
+            }
+        }
+
+        function setupPeer(role) {
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+            pc = new RTCPeerConnection(rtcConfig);
+
+            if (role === 'viewer') {
+                pc.ondatachannel = (event) => {
+                    dataChannel = event.channel;
+                    dataChannel.onopen = () => console.log("DataChannel open on Viewer!");
+                };
+
+                pc.ontrack = (event) => {
+                    if (remoteVideo.srcObject !== event.streams[0]) {
+                        remoteVideo.srcObject = event.streams[0];
+                        
+                        if (event.streams[0] && event.streams[0].getVideoTracks()[0]) {
+                            const track = event.streams[0].getVideoTracks()[0];
+                            if ('contentHint' in track) {
+                                track.contentHint = 'motion';
+                            }
+                        }
+
+                        document.getElementById('center-overlay').style.display = 'none';
+                        document.getElementById('status-top').innerText = 'Трансляция активна';
+                        
+                        startSessionTimer();
+                        
+                        remoteVideo.play().catch(err => {
+                            console.log("Autoplay blocked:", err);
+                        });
+                    }
+                };
+            }
+
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    ws.send(JSON.stringify({ type: 'signal', payload: { candidate: event.candidate } }));
+                }
+            };
+        }
+
+        function toggleFullScreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                }
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>
