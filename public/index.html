@@ -80,9 +80,27 @@
             height: 100%;
             z-index: 10;
         }
+
+        /* Professional lokal kursor dizayni (kechikishni yo'qotish uchun) */
+        #local-cursor {
+            position: fixed;
+            width: 16px;
+            height: 16px;
+            pointer-events: none;
+            z-index: 99999;
+            display: none;
+            transform: translate(0, 0);
+        }
     </style>
 </head>
 <body>
+
+    <!-- Maxsus lokal kursor elementi -->
+    <div id="local-cursor">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="white" stroke="black" stroke-width="1.5">
+            <polygon points="0,0 0,18 5,13 11,22 14,20 8,11 16,11"></polygon>
+        </svg>
+    </div>
 
     <header>
         <h3 style="margin:0; color:#fff; font-size: 16px;">Admin Tools <span style="font-size: 11px; color: #aaa;">In God We trust!</span></h3>
@@ -163,6 +181,7 @@
 
         const screenContainer = document.getElementById('screen-container');
         const remoteVideo = document.getElementById('remoteVideo');
+        const localCursor = document.getElementById('local-cursor');
 
         let lastMouseX = 0;
         let lastMouseY = 0;
@@ -173,17 +192,23 @@
             }
         }
 
-        // Professional darajadagi aniq kordinata hisoblash (2 sm siljishni oldini oladi)
+        // 100% Aniq koordinata va zudlik bilanharakatlanuvchi lokal kursor
         screenContainer.addEventListener('mousemove', (e) => {
             if (!isConnected) return;
             const rect = remoteVideo.getBoundingClientRect();
             
-            // Agar sichqoncha video tasviri doirasidan tashqarida bo'lsa
+            // Agar sichqoncha video doirasidan tashqarida bo'lsa
             if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
+                localCursor.style.display = 'none';
                 return;
             }
 
-            // Aniq nisbatni [0.0 dan 1.0 gacha] hisoblaymiz
+            // Lokal kursorni darhol siljitamiz (kechikishni yo'qotish uchun)
+            localCursor.style.display = 'block';
+            localCursor.style.left = e.clientX + 'px';
+            localCursor.style.top = e.clientY + 'px';
+
+            // Faqat video o'lchamiga qarab 0.0 dan 1.0 gacha aniq nisbatni hisoblaymiz (1 mm ham adashmaydi)
             lastMouseX = (e.clientX - rect.left) / rect.width;
             lastMouseY = (e.clientY - rect.top) / rect.height;
 
@@ -241,6 +266,7 @@
                         ws.send(JSON.stringify({ type: 'start-stream' }));
                         isConnected = true;
                         screenContainer.classList.add('hide-cursor');
+                        localCursor.style.display = 'block';
                         mainBtn.innerText = 'Отключить';
                         mainBtn.className = 'disconnect-btn';
                         
@@ -308,6 +334,7 @@
                 ws.send(JSON.stringify({ type: 'start-stream' }));
                 isConnected = true;
                 screenContainer.classList.add('hide-cursor');
+                localCursor.style.display = 'block';
                 sessionStorage.setItem('autoConnect', 'true');
                 mainBtn.innerText = 'Отключить';
                 mainBtn.className = 'disconnect-btn';
@@ -336,6 +363,7 @@
             screenContainer.classList.remove('hide-cursor');
             sessionStorage.removeItem('autoConnect');
             stopSessionTimer();
+            localCursor.style.display = 'none';
             
             if (localStream) {
                 localStream.getTracks().forEach(track => track.stop());
@@ -354,9 +382,9 @@
             document.getElementById('center-overlay').style.display = 'flex';
             document.getElementById('overlay-msg').innerText = msg;
             
-            const mainBtn = document.getElementById('main-action-btn');
-            mainBtn.innerText = 'Подключить';
-            mainBtn.className = 'connect-btn';
+            valBtn = document.getElementById('main-action-btn');
+            valBtn.innerText = 'Подключить';
+            valBtn.className = 'connect-btn';
 
             const badge = document.getElementById('status-badge');
             badge.innerText = 'Отключен';
