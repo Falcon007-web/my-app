@@ -16,7 +16,7 @@
             overflow: hidden;
         }
 
-        /* Butun oynada brauzer kursorini to'liq yashirish */
+        /* Barcha oynada brauzer kursorini to'liq yashirish */
         body.hide-cursor, 
         body.hide-cursor * {
             cursor: none !important;
@@ -69,7 +69,9 @@
             height: 100%;
             object-fit: contain;
             background: #000;
+            pointer-events: none; /* Kursor videoga emas, to'g'ridan-to'g'ri konteynerga ta'sir qilishini ta'minlaydi */
         }
+
         #center-overlay {
             position: absolute;
             display: flex;
