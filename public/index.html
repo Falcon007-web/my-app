@@ -173,17 +173,17 @@
             }
         }
 
-        // To'g'ridan-to'g'ri video elementining haqiqiy o'lchamiga qarab kordinatani hisoblash (2 sm farq qilishini yo'qotadi)
+        // Professional darajadagi aniq kordinata hisoblash (2 sm siljishni oldini oladi)
         screenContainer.addEventListener('mousemove', (e) => {
             if (!isConnected) return;
             const rect = remoteVideo.getBoundingClientRect();
             
-            // Agar sichqoncha video ko'rsatilayotgan sohadan tashqarida bo'lsa
+            // Agar sichqoncha video tasviri doirasidan tashqarida bo'lsa
             if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
                 return;
             }
 
-            // Aniq nisbatni topamiz (0 dan 1 gacha)
+            // Aniq nisbatni [0.0 dan 1.0 gacha] hisoblaymiz
             lastMouseX = (e.clientX - rect.left) / rect.width;
             lastMouseY = (e.clientY - rect.top) / rect.height;
 
@@ -192,6 +192,8 @@
 
         screenContainer.addEventListener('mousedown', (e) => {
             if (!isConnected) return;
+            const rect = remoteVideo.getBoundingClientRect();
+            if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
             sendInput({ action: 'mousedown', button: e.button });
         });
 
@@ -375,7 +377,7 @@
                         cursor: "never",
                         width: { ideal: 1280, max: 1280 },
                         height: { ideal: 720, max: 720 },
-                        frameRate: { ideal: 20, max: 25 }
+                        frameRate: { ideal: 25, max: 30 }
                     }, 
                     audio: false 
                 });
@@ -432,7 +434,6 @@
                             }
                         }
 
-                        document.getElementById('center-overlay').style.display, 'none';
                         document.getElementById('center-overlay').style.display = 'none';
                         document.getElementById('status-top').innerText = 'Трансляция активна';
                         
