@@ -81,7 +81,6 @@
             z-index: 10;
         }
 
-        /* Professional lokal kursor dizayni (kechikishni yo'qotish uchun) */
         #local-cursor {
             position: fixed;
             width: 16px;
@@ -95,7 +94,6 @@
 </head>
 <body>
 
-    <!-- Maxsus lokal kursor elementi -->
     <div id="local-cursor">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="white" stroke="black" stroke-width="1.5">
             <polygon points="0,0 0,18 5,13 11,22 14,20 8,11 16,11"></polygon>
@@ -192,23 +190,50 @@
             }
         }
 
-        // 100% Aniq koordinata va zudlik bilanharakatlanuvchi lokal kursor
+        // Qora bo'sh joylarni chetlab o'tib, faqat video tasviri turgan real hududni aniq topish funksiyasi
+        function getVideoContentRect(video) {
+            const rect = video.getBoundingClientRect();
+            if (!video.videoWidth || !video.videoHeight) return rect;
+
+            const videoRatio = video.videoWidth / video.videoHeight;
+            const elementRatio = rect.width / rect.height;
+
+            let renderWidth = rect.width;
+            let renderHeight = rect.height;
+            let offsetX = 0;
+            let offsetY = 0;
+
+            if (elementRatio > videoRatio) {
+                renderWidth = rect.height * videoRatio;
+                offsetX = (rect.width - renderWidth) / 2;
+            } else if (elementRatio < videoRatio) {
+                renderHeight = rect.width / videoRatio;
+                offsetY = (rect.height - renderHeight) / 2;
+            }
+
+            return {
+                left: rect.left + offsetX,
+                top: rect.top + offsetY,
+                width: renderWidth,
+                height: renderHeight
+            };
+        }
+
         screenContainer.addEventListener('mousemove', (e) => {
             if (!isConnected) return;
-            const rect = remoteVideo.getBoundingClientRect();
+            const rect = getVideoContentRect(remoteVideo);
             
-            // Agar sichqoncha video doirasidan tashqarida bo'lsa
+            // Agar sichqoncha haqiqiy video tasviridan tashqariga (qora hududga) chiqib ketsa
             if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
                 localCursor.style.display = 'none';
                 return;
             }
 
-            // Lokal kursorni darhol siljitamiz (kechikishni yo'qotish uchun)
             localCursor.style.display = 'block';
             localCursor.style.left = e.clientX + 'px';
             localCursor.style.top = e.clientY + 'px';
 
-            // Faqat video o'lchamiga qarab 0.0 dan 1.0 gacha aniq nisbatni hisoblaymiz (1 mm ham adashmaydi)
+            // Chekkalarda ham 100% aniqlikda hisoblanadi
             lastMouseX = (e.clientX - rect.left) / rect.width;
             lastMouseY = (e.clientY - rect.top) / rect.height;
 
@@ -217,7 +242,7 @@
 
         screenContainer.addEventListener('mousedown', (e) => {
             if (!isConnected) return;
-            const rect = remoteVideo.getBoundingClientRect();
+            const rect = getVideoContentRect(remoteVideo);
             if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
             sendInput({ action: 'mousedown', button: e.button });
         });
@@ -382,9 +407,9 @@
             document.getElementById('center-overlay').style.display = 'flex';
             document.getElementById('overlay-msg').innerText = msg;
             
-            valBtn = document.getElementById('main-action-btn');
-            valBtn.innerText = 'Подключить';
-            valBtn.className = 'connect-btn';
+            const mainBtn = document.getElementById('main-action-btn');
+            mainBtn.innerText = 'Подключить';
+            mainBtn.className = 'connect-btn';
 
             const badge = document.getElementById('status-badge');
             badge.innerText = 'Отключен';
