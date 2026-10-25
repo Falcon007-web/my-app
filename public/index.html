@@ -1,195 +1,441 @@
-const express = require('express');
-const http = require('http');
-const { Server } = require('ws');
-const { v4: uuidv4 } = require('uuid');
-const path = require('path');
-
-const app = express();
-const server = http.createServer(app);
-const wss = new Server({ server });
-
-app.use(express.static(path.join(__dirname, 'public')));
-
-// token -> { agentWs, browserWs, viewers: Set(), agentName }
-const sessions = new Map();
-
-app.get('/sharing', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-function broadcastViewerCount(session) {
-    if (!session) return;
-    const count = session.viewers.size;
-    const message = JSON.stringify({ type: 'viewer-count', count: count });
-    for (const viewerWs of session.viewers) {
-        if (viewerWs.readyState === viewerWs.OPEN) {
-            viewerWs.send(message);
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Tools - Remote Desktop</title>
+    <style>
+        body {
+            margin: 0;
+            background: #1a1a1a;
+            color: #fff;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
         }
-    }
-}
-
-wss.on('connection', (ws) => {
-    ws.isAlive = true;
-    ws.on('pong', () => { ws.isAlive = true; });
-
-    ws.on('message', (message) => {
-        try {
-            const data = JSON.parse(message);
-
-            // 1. Asosiy Agent ro'yxatdan o'tishi
-            if (data.type === 'register-agent') {
-                const token = uuidv4().replace(/-/g, '') + uuidv4().replace(/-/g, '');
-                const agentName = data.hostname || 'REMOTE-PC';
-                
-                sessions.set(token, { agentWs: ws, browserWs: null, viewers: new Set(), agentName: agentName });
-                ws.sessionToken = token;
-                ws.clientRole = 'agent';
-
-                const sharingUrl = 'https://admin.falconsupportsession.com/sharing?c=' + token;
-
-                ws.send(JSON.stringify({
-                    type: 'registered',
-                    sharingUrl: sharingUrl
-                }));
-
-                console.log('\n========================================');
-                console.log(`KOMPYUTER ULANDI: [ ${agentName} ]`);
-                console.log(`SHARING URL: ${sharingUrl}`);
-                console.log('========================================\n');
-            }
-
-            // 1.1. Agent qayta ulanishi
-            if (data.type === 'register-agent-back') {
-                let session = sessions.get(data.token);
-                if (!session) {
-                    session = { agentWs: ws, browserWs: null, viewers: new Set(), agentName: data.hostname || 'REMOTE-PC' };
-                    sessions.set(data.token, session);
-                } else {
-                    session.agentWs = ws;
-                    if (data.hostname) session.agentName = data.hostname;
-                }
-
-                ws.sessionToken = data.token;
-                ws.clientRole = 'agent';
-
-                const sharingUrl = 'https://admin.falconsupportsession.com/sharing?c=' + data.token;
-                
-                ws.send(JSON.stringify({
-                    type: 'registered',
-                    sharingUrl: sharingUrl
-                }));
-
-                if (session.browserWs) {
-                    session.browserWs.send(JSON.stringify({ type: 'start-stream' }));
-                }
-            }
-
-            // 2. Puppeteer Brauzer ulanishi
-            if (data.type === 'register-agent-token') {
-                let session = sessions.get(data.token);
-                if (session) {
-                    session.browserWs = ws;
-                    ws.sessionToken = data.token;
-                    ws.clientRole = 'browser';
-                    if (data.hostname) session.agentName = data.hostname;
-
-                    if (session.viewerWs) {
-                        session.viewerWs.send(JSON.stringify({ 
-                            type: 'joined-success', 
-                            agentName: session.agentName 
-                        }));
-                        ws.send(JSON.stringify({ type: 'start-stream' }));
-                    }
-                } else {
-                    ws.send(JSON.stringify({ type: 'error', message: 'Session expired!' }));
-                }
-            }
-
-            // 3. Viewer ulanishi
-            if (data.type === 'join-viewer') {
-                let session = sessions.get(data.token);
-                if (session) {
-                    session.viewerWs = ws; // Asl ishlaydigan o'zgaruvchi qaytarildi
-                    session.viewers.add(ws);
-                    ws.sessionToken = data.token;
-                    ws.clientRole = 'viewer';
-                    
-                    ws.send(JSON.stringify({ 
-                        type: 'joined-success', 
-                        agentName: session.agentName || 'REMOTE-PC' 
-                    }));
-
-                    broadcastViewerCount(session);
-                    console.log(`[OPERATOR KIRDI] Kompyuter: ${session.agentName}`);
-                } else {
-                    ws.send(JSON.stringify({ type: 'error', message: 'Session not found!' }));
-                }
-            }
-
-            // 4. Stream boshlash (Asl ishlaydigan holatiga qaytarildi)
-            if (data.type === 'start-stream') {
-                const session = sessions.get(ws.sessionToken);
-                if (session && session.browserWs) {
-                    session.viewerWs = ws;
-                    session.viewers.add(ws);
-                    session.browserWs.send(JSON.stringify({ type: 'start-stream' }));
-                    broadcastViewerCount(session);
-                    console.log(`[STREAM] Boshlandi: ${session.agentName}`);
-                }
-            }
-
-            // 5. Seansni uzish
-            if (data.type === 'disconnect-session') {
-                const session = sessions.get(ws.sessionToken);
-                if (session && session.viewerWs === ws) {
-                    session.viewerWs = null;
-                    session.viewers.delete(ws);
-                    broadcastViewerCount(session);
-                    console.log(`[OPERATOR CHIQDI] Kompyuter: ${session.agentName}`);
-                }
-            }
-
-            // 6. WebRTC Signallar (Asl ishlaydigan qism)
-            if (data.type === 'signal') {
-                const session = sessions.get(ws.sessionToken);
-                if (session) {
-                    if (ws.clientRole === 'viewer' && session.browserWs) {
-                        session.browserWs.send(JSON.stringify({ type: 'signal', payload: data.payload }));
-                    } else if (ws.clientRole === 'browser' && session.viewerWs) {
-                        session.viewerWs.send(JSON.stringify({ type: 'signal', payload: data.payload }));
-                    }
-                }
-            }
-        } catch (e) {
-            console.error('Server error:', e);
+        header {
+            background: #2c2c2c;
+            padding: 8px 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #444;
         }
-    });
+        .toolbar {
+            background: #f8f9fa;
+            padding: 5px 12px;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            border-bottom: 1px solid #ddd;
+        }
+        button {
+            background: #e2e6ea;
+            color: #333;
+            border: 1px solid #ced4da;
+            padding: 4px 10px;
+            font-size: 13px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        button:hover { background: #dae0e5; }
+        button.disconnect-btn { background: #f8d7da; color: #721c24; border-color: #f5c6cb; }
+        button.connect-btn { background: #d4edda; color: #155724; border-color: #c3e6cb; }
 
-    ws.on('close', () => {
-        sessions.forEach((session, token) => {
-            if (session.agentWs === ws) {
-                session.agentWs = null;
-                console.log(`[AGENT UZILDI] Kompyuter: ${session.agentName} (Token saqlandi)`);
-            } else if (session.browserWs === ws) {
-                session.browserWs = null;
-            } else if (session.viewerWs === ws || (session.viewers && session.viewers.has(ws))) {
-                session.viewerWs = null;
-                session.viewers.delete(ws);
-                broadcastViewerCount(session);
+        #screen-container {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+            background: #000;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            cursor: default;
+        }
+
+        #screen-container.hide-cursor {
+            cursor: none !important;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #000;
+        }
+        #center-overlay {
+            position: absolute;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            background: rgba(0,0,0,0.85);
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h3 style="margin:0; color:#fff; font-size: 16px;">Admin Tools <span style="font-size: 11px; color: #aaa;">In God We trust!</span></h3>
+        <div id="status-top" style="color: #28a745; font-weight: bold; font-size: 13px;">Ожидание агента...</div>
+    </header>
+
+    <div class="toolbar">
+        <button id="main-action-btn" class="connect-btn" onclick="toggleConnection()" style="display: none;">Подключить</button>
+        <button id="status-badge" disabled style="background: #f8d7da; color: #721c24; border-color: #f5c6cb; padding: 4px 10px; font-size: 13px; border-radius: 4px; font-weight: bold; cursor: default;">Отключен</button>
+        
+        <span id="sessionTimer" style="font-weight: bold; color: #333; background: #e2e6ea; padding: 4px 8px; border-radius: 4px; border: 1px solid #ced4da; font-size: 13px;">00:00:00</span>
+        <span id="viewerCount" style="font-weight: bold; color: #333; background: #e2e6ea; padding: 4px 8px; border-radius: 4px; border: 1px solid #ced4da; font-size: 13px;">Смотрят: 1</span>
+
+        <button onclick="toggleFullScreen()" style="margin-left: auto;">Полноэкранный</button>
+    </div>
+
+    <div id="screen-container">
+        <div id="center-overlay">
+            <h2 id="overlay-msg" style="color: #fff; font-size: 20px;">Поиск агента на компьютере...</h2>
+        </div>
+        <video id="remoteVideo" autoplay playsinline></video>
+    </div>
+
+    <script>
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+        const wsUrl = wsProtocol + window.location.host;
+        let ws;
+        let pc;
+        let dataChannel;
+        let localStream = null;
+        let isConnected = false;
+
+        let timerInterval = null;
+        let secondsElapsed = 0;
+
+        function startSessionTimer() {
+            stopSessionTimer();
+            secondsElapsed = 0;
+            const timerElement = document.getElementById('sessionTimer');
+            
+            timerInterval = setInterval(() => {
+                secondsElapsed++;
+                const hrs = Math.floor(secondsElapsed / 3600).toString().padStart(2, '0');
+                const mins = Math.floor((secondsElapsed % 3600) / 60).toString().padStart(2, '0');
+                const secs = (secondsElapsed % 60).toString().padStart(2, '0');
+                timerElement.innerText = `${hrs}:${mins}:${secs}`;
+            }, 1000);
+        }
+
+        function stopSessionTimer() {
+            if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+            }
+            document.getElementById('sessionTimer').innerText = '00:00:00';
+        }
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('c');
+        const isAgentMode = window.location.hash === '#agent';
+
+        const rtcConfig = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:stun3.l.google.com:19302' },
+                { urls: 'stun:stun4.l.google.com:19302' },
+                { urls: 'stun:stun.services.mozilla.com' },
+                {
+                    urls: 'turn:138.124.71.22:3478',
+                    username: 'admin',
+                    credential: 'supersecret123'
+                }
+            ]
+        };
+
+        const screenContainer = document.getElementById('screen-container');
+
+        let lastMouseX = 0;
+        let lastMouseY = 0;
+        let mouseMoveScheduled = false;
+
+        function sendInput(data) {
+            if (dataChannel && dataChannel.readyState === 'open') {
+                dataChannel.send(JSON.stringify(data));
+            }
+        }
+
+        screenContainer.addEventListener('mousemove', (e) => {
+            if (!isConnected) return;
+            const rect = screenContainer.getBoundingClientRect();
+            
+            lastMouseX = (e.clientX - rect.left) / rect.width;
+            lastMouseY = (e.clientY - rect.top) / rect.height;
+
+            if (!mouseMoveScheduled) {
+                mouseMoveScheduled = true;
+                requestAnimationFrame(() => {
+                    sendInput({ action: 'mousemove', x: lastMouseX, y: lastMouseY });
+                    mouseMoveScheduled = false;
+                });
             }
         });
-    });
-});
 
-const interval = setInterval(() => {
-    wss.clients.forEach((ws) => {
-        if (ws.isAlive === false) return ws.terminate();
-        ws.isAlive = false;
-        ws.ping();
-    });
-}, 30000);
+        screenContainer.addEventListener('mousedown', (e) => {
+            if (!isConnected) return;
+            sendInput({ action: 'mousedown', button: e.button });
+        });
 
-const PORT = 3030;
-server.listen(PORT, () => {
-    console.log('Server is running on port ' + PORT);
-});
+        screenContainer.addEventListener('mouseup', (e) => {
+            if (!isConnected) return;
+            sendInput({ action: 'mouseup', button: e.button });
+        });
+
+        screenContainer.addEventListener('contextmenu', (e) => e.preventDefault());
+
+        window.addEventListener('keydown', (e) => {
+            if (!isConnected) return;
+            sendInput({ action: 'keydown', key: e.key, code: e.code });
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (!isConnected) return;
+            sendInput({ action: 'keyup', key: e.key, code: e.code });
+        });
+
+        function init() {
+            ws = new WebSocket(wsUrl);
+            ws.onopen = () => {
+                if (isAgentMode && token) {
+                    ws.send(JSON.stringify({ type: 'register-agent-token', token: token, hostname: "PC-" + Math.floor(Math.random()*9000+1000) }));
+                } else if (token) {
+                    ws.send(JSON.stringify({ type: 'join-viewer', token: token }));
+                }
+            };
+
+            ws.onmessage = async (event) => {
+                const message = JSON.parse(event.data);
+
+                if (message.type === 'joined-success') {
+                    document.getElementById('status-top').innerText = 'Агент найден: ' + message.agentName;
+                    document.getElementById('overlay-msg').innerText = 'Готово к подключению';
+                    const mainBtn = document.getElementById('main-action-btn');
+                    mainBtn.style.display = 'inline-block';
+                    mainBtn.innerText = 'Подключить';
+                    mainBtn.className = 'connect-btn';
+
+                    if (sessionStorage.getItem('autoConnect') === 'true' && !isConnected) {
+                        document.getElementById('overlay-msg').innerText = 'Установка соединения...';
+                        setupPeer('viewer');
+                        ws.send(JSON.stringify({ type: 'start-stream' }));
+                        isConnected = true;
+                        screenContainer.classList.add('hide-cursor');
+                        mainBtn.innerText = 'Отключить';
+                        mainBtn.className = 'disconnect-btn';
+                        
+                        const badge = document.getElementById('status-badge');
+                        badge.innerText = 'Подключено';
+                        badge.style.background = '#d4edda';
+                        badge.style.color = '#155724';
+                        badge.style.borderColor = '#c3e6cb';
+
+                        startSessionTimer();
+                    }
+                }
+
+                if (message.type === 'viewer-count') {
+                    document.getElementById('viewerCount').innerText = `Смотрят: ${message.count}`;
+                }
+
+                if (message.type === 'start-stream' && isAgentMode) {
+                    await startAgentSharing();
+                }
+
+                if (message.type === 'disconnected') {
+                    resetInterface("Сессия завершена / разорвана");
+                }
+
+                if (message.type === 'signal') {
+                    if (!pc) setupPeer(isAgentMode ? 'agent' : 'viewer');
+
+                    if (message.payload.sdp) {
+                        await pc.setRemoteDescription(new RTCSessionDescription(message.payload.sdp));
+                        if (message.payload.sdp.type === 'offer') {
+                            const answer = await pc.createAnswer();
+                            await pc.setLocalDescription(answer);
+                            ws.send(JSON.stringify({ type: 'signal', payload: { sdp: pc.localDescription } }));
+                        }
+                    } else if (message.payload.candidate) {
+                        try {
+                            await pc.addIceCandidate(new RTCIceCandidate(message.payload.candidate));
+                        } catch (e) {
+                            console.error('ICE error:', e);
+                        }
+                    }
+                }
+            };
+        }
+
+        function toggleConnection() {
+            const mainBtn = document.getElementById('main-action-btn');
+            const badge = document.getElementById('status-badge');
+
+            if (!isConnected) {
+                document.getElementById('overlay-msg').innerText = 'Установка соединения...';
+                setupPeer('viewer');
+                ws.send(JSON.stringify({ type: 'start-stream' }));
+                isConnected = true;
+                screenContainer.classList.add('hide-cursor');
+                sessionStorage.setItem('autoConnect', 'true');
+                mainBtn.innerText = 'Отключить';
+                mainBtn.className = 'disconnect-btn';
+                
+                badge.innerText = 'Подключено';
+                badge.style.background = '#d4edda';
+                badge.style.color = '#155724';
+                badge.style.borderColor = '#c3e6cb';
+
+                startSessionTimer();
+            } else {
+                disconnectSession();
+            }
+        }
+
+        function disconnectSession() {
+            sessionStorage.removeItem('autoConnect');
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'disconnect-session' }));
+            }
+            resetInterface("Соединение разорвано");
+        }
+
+        function resetInterface(msg) {
+            isConnected = false;
+            screenContainer.classList.remove('hide-cursor');
+            sessionStorage.removeItem('autoConnect');
+            stopSessionTimer();
+            
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+            if (dataChannel) {
+                dataChannel.close();
+                dataChannel = null;
+            }
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+
+            document.getElementById('remoteVideo').srcObject = null;
+            document.getElementById('center-overlay').style.display = 'flex';
+            document.getElementById('overlay-msg').innerText = msg;
+            
+            const mainBtn = document.getElementById('main-action-btn');
+            mainBtn.innerText = 'Подключить';
+            mainBtn.className = 'connect-btn';
+
+            const badge = document.getElementById('status-badge');
+            badge.innerText = 'Отключен';
+            badge.style.background = '#f8d7da';
+            badge.style.color = '#721c24';
+            badge.style.borderColor = '#f5c6cb';
+        }
+
+        async function startAgentSharing() {
+            try {
+                if (localStream) {
+                    localStream.getTracks().forEach(track => track.stop());
+                    localStream = null;
+                }
+
+                // FPS va oqim hajmi pastroq (20-30 FPS, 720p ideal) sozlangan
+                localStream = await navigator.mediaDevices.getDisplayMedia({ 
+                    video: { 
+                        cursor: "never",
+                        width: { ideal: 1280, max: 1920 },
+                        height: { ideal: 720, max: 1080 },
+                        frameRate: { ideal: 20, max: 30 }
+                    }, 
+                    audio: false 
+                });
+
+                document.getElementById('center-overlay').style.display = 'none';
+
+                setupPeer('agent');
+                
+                dataChannel = pc.createDataChannel("input-channel", { ordered: false, maxRetransmits: 0 });
+                dataChannel.onopen = () => console.log("DataChannel open on Agent!");
+
+                localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                ws.send(JSON.stringify({ type: 'signal', payload: { sdp: pc.localDescription } }));
+
+                localStream.getVideoTracks()[0].onended = () => {
+                    disconnectSession();
+                };
+            } catch (err) {
+                console.error('Screen capture error:', err.message);
+            }
+        }
+
+        function setupPeer(role) {
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+            pc = new RTCPeerConnection(rtcConfig);
+
+            if (role === 'viewer') {
+                pc.ondatachannel = (event) => {
+                    dataChannel = event.channel;
+                    dataChannel.onopen = () => console.log("DataChannel open on Viewer!");
+                };
+
+                pc.ontrack = (event) => {
+                    const videoElement = document.getElementById('remoteVideo');
+                    if (videoElement.srcObject !== event.streams[0]) {
+                        videoElement.srcObject = event.streams[0];
+                        document.getElementById('center-overlay').style.display = 'none';
+                        document.getElementById('status-top').innerText = 'Трансляция активна';
+                        
+                        startSessionTimer();
+                        
+                        videoElement.play().catch(err => {
+                            console.log("Autoplay blocked:", err);
+                        });
+                    }
+                };
+            }
+
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    ws.send(JSON.stringify({ type: 'signal', payload: { candidate: event.candidate } }));
+                }
+            };
+        }
+
+        function toggleFullScreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                }
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>
