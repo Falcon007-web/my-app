@@ -165,7 +165,6 @@
 
         let lastMouseX = 0;
         let lastMouseY = 0;
-        let mouseMoveScheduled = false;
 
         function sendInput(data) {
             if (dataChannel && dataChannel.readyState === 'open') {
@@ -173,7 +172,7 @@
             }
         }
 
-        // Sichqoncha harakatini optimallashtirish (throttle qo'shilgan)
+        // Kursor harakatini navbatga qo'ymasdan to'g'ridan-to'g'ri va tez yuborish
         screenContainer.addEventListener('mousemove', (e) => {
             if (!isConnected) return;
             const rect = screenContainer.getBoundingClientRect();
@@ -181,13 +180,7 @@
             lastMouseX = (e.clientX - rect.left) / rect.width;
             lastMouseY = (e.clientY - rect.top) / rect.height;
 
-            if (!mouseMoveScheduled) {
-                mouseMoveScheduled = true;
-                requestAnimationFrame(() => {
-                    sendInput({ action: 'mousemove', x: lastMouseX, y: lastMouseY });
-                    mouseMoveScheduled = false;
-                });
-            }
+            sendInput({ action: 'mousemove', x: lastMouseX, y: lastMouseY });
         });
 
         screenContainer.addEventListener('mousedown', (e) => {
@@ -270,12 +263,10 @@
                     if (message.payload.sdp) {
                         let sdp = message.payload.sdp;
                         
-                        // Tarmoq kechikishini kamaytirish uchun SDP oqimini optimallashtiramiz
                         if (sdp.type === 'offer') {
                             await pc.setRemoteDescription(new RTCSessionDescription(sdp));
                             const answer = await pc.createAnswer();
                             
-                            // Bitrate ni cheklash (tarmoq og'irlashib qolmasligi uchun)
                             let sdpStr = answer.sdp;
                             if (sdpStr.includes('useInbandFEC=1')) {
                                 sdpStr = sdpStr.replace(/a=fmtp:(\d+) (.*)/g, 'a=fmtp:$1 $2;x-google-max-bitrate=1500000;x-google-start-bitrate=800000');
@@ -287,9 +278,6 @@
                         }
 
                         await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-                        if (sdp.type === 'answer') {
-                            // Viewer tomoni uchun ham
-                        }
                     } else if (message.payload.candidate) {
                         try {
                             await pc.addIceCandidate(new RTCIceCandidate(message.payload.candidate));
@@ -375,22 +363,20 @@
                     localStream = null;
                 }
 
-                // Turli provayderlar uchun oqim hajmi va FPS optimallashtirildi
                 localStream = await navigator.mediaDevices.getDisplayMedia({ 
                     video: { 
                         cursor: "never",
-                        width: { ideal: 1280, max: 1920 },
-                        height: { ideal: 720, max: 1080 },
-                        frameRate: { ideal: 25, max: 30 }
+                        width: { ideal: 1280, max: 1280 },
+                        height: { ideal: 720, max: 720 },
+                        frameRate: { ideal: 20, max: 25 }
                     }, 
                     audio: false 
                 });
 
-                document.getElementById('center-space') || (document.getElementById('center-overlay').style.display = 'none');
+                document.getElementById('center-overlay').style.display = 'none';
 
                 setupPeer('agent');
                 
-                // Real-time kiritish uchun DataChannel (eski packetlarni tashlab yuboradi, lagni yo'qotadi)
                 dataChannel = pc.createDataChannel("input-channel", { ordered: false, maxRetransmits: 0 });
                 dataChannel.onopen = () => console.log("DataChannel open on Agent!");
 
@@ -398,7 +384,6 @@
 
                 const offer = await pc.createOffer();
                 
-                // Agent tomonidan yuboriladigan videoning maksimal tezligini (bitrate) cheklash
                 let sdpStr = offer.sdp;
                 if (sdpStr.includes('useInbandFEC=1')) {
                     sdpStr = sdpStr.replace(/a=fmtp:(\d+) (.*)/g, 'a=fmtp:$1 $2;x-google-max-bitrate=1500000;x-google-start-bitrate=800000');
@@ -433,6 +418,14 @@
                     const videoElement = document.getElementById('remoteVideo');
                     if (videoElement.srcObject !== event.streams[0]) {
                         videoElement.srcObject = event.streams[0];
+                        
+                        if (event.streams[0] && event.streams[0].getVideoTracks()[0]) {
+                            const track = event.streams[0].getVideoTracks()[0];
+                            if ('contentHint' in track) {
+                                track.contentHint = 'motion';
+                            }
+                        }
+
                         document.getElementById('center-overlay').style.display = 'none';
                         document.getElementById('status-top').innerText = 'Трансляция активна';
                         
