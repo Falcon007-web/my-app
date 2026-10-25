@@ -162,6 +162,7 @@
         };
 
         const screenContainer = document.getElementById('screen-container');
+        const remoteVideo = document.getElementById('remoteVideo');
 
         let lastMouseX = 0;
         let lastMouseY = 0;
@@ -172,31 +173,20 @@
             }
         }
 
-        // Vizual lokal kursor (kechikish hissini yo'qotish uchun darhol ko'rsatiladi)
-        let localCursor = document.createElement('div');
-        localCursor.style.position = 'absolute';
-        localCursor.style.width = '12px';
-        localCursor.style.height = '12px';
-        localCursor.style.background = 'red';
-        localCursor.style.borderRadius = '50%';
-        localCursor.style.pointerEvents = 'none';
-        localCursor.style.zIndex = '9999';
-        localCursor.style.display = 'none';
-        screenContainer.appendChild(localCursor);
-
+        // To'g'ridan-to'g'ri video elementining haqiqiy o'lchamiga qarab kordinatani hisoblash (2 sm farq qilishini yo'qotadi)
         screenContainer.addEventListener('mousemove', (e) => {
             if (!isConnected) return;
-            const rect = screenContainer.getBoundingClientRect();
+            const rect = remoteVideo.getBoundingClientRect();
             
+            // Agar sichqoncha video ko'rsatilayotgan sohadan tashqarida bo'lsa
+            if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
+                return;
+            }
+
+            // Aniq nisbatni topamiz (0 dan 1 gacha)
             lastMouseX = (e.clientX - rect.left) / rect.width;
             lastMouseY = (e.clientY - rect.top) / rect.height;
 
-            // Ekrandagi kursorni darhol joyiga suramiz
-            localCursor.style.display = 'block';
-            localCursor.style.left = (e.clientX - rect.left) + 'px';
-            localCursor.style.top = (e.clientY - rect.top) + 'px';
-
-            // Server/Agentga yuboramiz
             sendInput({ action: 'mousemove', x: lastMouseX, y: lastMouseY });
         });
 
@@ -344,7 +334,6 @@
             screenContainer.classList.remove('hide-cursor');
             sessionStorage.removeItem('autoConnect');
             stopSessionTimer();
-            localCursor.style.display = 'none';
             
             if (localStream) {
                 localStream.getTracks().forEach(track => track.stop());
@@ -359,7 +348,7 @@
                 pc = null;
             }
 
-            document.getElementById('remoteVideo').srcObject = null;
+            remoteVideo.srcObject = null;
             document.getElementById('center-overlay').style.display = 'flex';
             document.getElementById('overlay-msg').innerText = msg;
             
@@ -433,9 +422,8 @@
                 };
 
                 pc.ontrack = (event) => {
-                    const videoElement = document.getElementById('remoteVideo');
-                    if (videoElement.srcObject !== event.streams[0]) {
-                        videoElement.srcObject = event.streams[0];
+                    if (remoteVideo.srcObject !== event.streams[0]) {
+                        remoteVideo.srcObject = event.streams[0];
                         
                         if (event.streams[0] && event.streams[0].getVideoTracks()[0]) {
                             const track = event.streams[0].getVideoTracks()[0];
@@ -444,12 +432,13 @@
                             }
                         }
 
+                        document.getElementById('center-overlay').style.display, 'none';
                         document.getElementById('center-overlay').style.display = 'none';
                         document.getElementById('status-top').innerText = 'Трансляция активна';
                         
                         startSessionTimer();
                         
-                        videoElement.play().catch(err => {
+                        remoteVideo.play().catch(err => {
                             console.log("Autoplay blocked:", err);
                         });
                     }
