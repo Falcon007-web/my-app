@@ -134,70 +134,23 @@
 
         const customCursor = document.getElementById('custom-cursor');
         const remoteVideo = document.getElementById('remoteVideo');
-
-        function startSessionTimer() {
-            stopSessionTimer();
-            secondsElapsed = 0;
-            const timerElement = document.getElementById('sessionTimer');
-            
-            timerInterval = setInterval(() => {
-                secondsElapsed++;
-                const hrs = Math.floor(secondsElapsed / 3600).toString().padStart(2, '0');
-                const mins = Math.floor((secondsElapsed % 3600) / 60).toString().padStart(2, '0');
-                const secs = (secondsElapsed % 60).toString().padStart(2, '0');
-                timerElement.innerText = `${hrs}:${mins}:${secs}`;
-            }, 1000);
-        }
-
-        function stopSessionTimer() {
-            if (timerInterval) {
-                clearInterval(timerInterval);
-                timerInterval = null;
-            }
-            document.getElementById('sessionTimer').innerText = '00:00:00';
-        }
-
-        const urlParams = new URLSearchParams(window.location.search);
-        const token = urlParams.get('c');
-        const isAgentMode = window.location.hash === '#agent';
-
-        const rtcConfig = {
-            iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun2.l.google.com:19302' },
-                { urls: 'stun:stun3.l.google.com:19302' },
-                { urls: 'stun:stun4.l.google.com:19302' },
-                { urls: 'stun:stun.services.mozilla.com' },
-                {
-                    urls: 'turn:138.124.71.22:3478',
-                    username: 'admin',
-                    credential: 'supersecret123'
-                }
-            ]
-        };
-
         const screenContainer = document.getElementById('screen-container');
 
         let lastMouseX = 0;
         let lastMouseY = 0;
         let mouseMoveScheduled = false;
 
-        function sendInput(data) {
-            if (dataChannel && dataChannel.readyState === 'open') {
-                dataChannel.send(JSON.stringify(data));
-            }
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'input', payload: data }));
-            }
-        }
+        // Video ramkasining keshga olingan o'lchami (qotishning oldini olish uchun)
+        let cachedVideoRect = null;
 
-        // Video ichidagi haqiqiy tasvir chegaralarini 100% aniqlikda hisoblash
-        function getVideoContentRect(video) {
-            const rect = video.getBoundingClientRect();
-            if (!video.videoWidth || !video.videoHeight) return rect;
+        function updateVideoRect() {
+            const rect = remoteVideo.getBoundingClientRect();
+            if (!remoteVideo.videoWidth || !remoteVideo.videoHeight) {
+                cachedVideoRect = rect;
+                return;
+            }
 
-            const videoRatio = video.videoWidth / video.videoHeight;
+            const videoRatio = remoteVideo.videoWidth / remoteVideo.videoHeight;
             const elementRatio = rect.width / rect.height;
 
             let renderWidth = rect.width;
@@ -213,7 +166,7 @@
                 offsetY = (rect.height - renderHeight) / 2;
             }
 
-            return {
+            cachedVideoRect = {
                 left: rect.left + offsetX,
                 top: rect.top + offsetY,
                 right: rect.left + offsetX + renderWidth,
@@ -223,20 +176,33 @@
             };
         }
 
+        window.addEventListener('resize', updateVideoRect);
+
+        function sendInput(data) {
+            if (dataChannel && dataChannel.readyState === 'open') {
+                dataChannel.send(JSON.stringify(data));
+            }
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'input', payload: data }));
+            }
+        }
+
         screenContainer.addEventListener('mousemove', (e) => {
             if (!isConnected) return;
             
-            // Custom kursorni ekran bo'ylab yurgizish
+            // Custom kursorni ekran bo'ylab silliq yurgizish
             customCursor.style.left = (e.clientX) + 'px';
             customCursor.style.top = (e.clientY) + 'px';
 
-            const rect = getVideoContentRect(remoteVideo);
+            if (!cachedVideoRect) updateVideoRect();
+            const rect = cachedVideoRect;
 
-            // Agar sichqoncha video qismidan tashqarida bo'lsa, koordinata yubormaymiz
+            // Agar sichqoncha qora bo'shliqlarda bo'lsa, hisoblamaymiz
             if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
                 return;
             }
 
+            // 100% aniqlikdagi proporsional koordinata (orada umuman farq qolmaydi)
             lastMouseX = (e.clientX - rect.left) / rect.width;
             lastMouseY = (e.clientY - rect.top) / rect.height;
 
@@ -350,6 +316,28 @@
                     }
                 }
             };
+        }
+
+        function startSessionTimer() {
+            stopSessionTimer();
+            secondsElapsed = 0;
+            const timerElement = document.getElementById('sessionTimer');
+            
+            timerInterval = setInterval(() => {
+                secondsElapsed++;
+                const hrs = Math.floor(secondsElapsed / 3600).toString().padStart(2, '0');
+                const mins = Math.floor((secondsElapsed % 3600) / 60).toString().padStart(2, '0');
+                const secs = (secondsElapsed % 60).toString().padStart(2, '0');
+                timerElement.innerText = `${hrs}:${mins}:${secs}`;
+            }, 1000);
+        }
+
+        function stopSessionTimer() {
+            if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+            }
+            document.getElementById('sessionTimer').innerText = '00:00:00';
         }
 
         function toggleConnection() {
@@ -481,6 +469,9 @@
                         remoteVideo.play().catch(err => {
                             console.log("Autoplay blocked:", err);
                         });
+
+                        // Video yuklangach koordinatani aniq hisoblab olamiz
+                        setTimeout(updateVideoRect, 200);
                     }
                 };
             }
