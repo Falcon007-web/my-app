@@ -134,6 +134,7 @@
 
         const customCursor = document.getElementById('custom-cursor');
         const remoteVideo = document.getElementById('remoteVideo');
+        const screenContainer = document.getElementById('screen-container');
 
         function startSessionTimer() {
             stopSessionTimer();
@@ -177,8 +178,6 @@
             ]
         };
 
-        const screenContainer = document.getElementById('screen-container');
-
         let lastMouseX = 0;
         let lastMouseY = 0;
         let mouseMoveScheduled = false;
@@ -192,12 +191,17 @@
             }
         }
 
-        // Video ichidagi haqiqiy tasvir chegaralarini 100% aniqlikda hisoblash
-        function getVideoContentRect(video) {
-            const rect = video.getBoundingClientRect();
-            if (!video.videoWidth || !video.videoHeight) return rect;
+        // Video o'lchamlarini keshga olib hisoblash (zarracha qotmaydi, masofa 0 mm bo'ladi)
+        let cachedVideoRect = null;
 
-            const videoRatio = video.videoWidth / video.videoHeight;
+        function updateVideoRect() {
+            const rect = remoteVideo.getBoundingClientRect();
+            if (!remoteVideo.videoWidth || !remoteVideo.videoHeight) {
+                cachedVideoRect = rect;
+                return;
+            }
+
+            const videoRatio = remoteVideo.videoWidth / remoteVideo.videoHeight;
             const elementRatio = rect.width / rect.height;
 
             let renderWidth = rect.width;
@@ -213,7 +217,7 @@
                 offsetY = (rect.height - renderHeight) / 2;
             }
 
-            return {
+            cachedVideoRect = {
                 left: rect.left + offsetX,
                 top: rect.top + offsetY,
                 right: rect.left + offsetX + renderWidth,
@@ -223,16 +227,17 @@
             };
         }
 
+        window.addEventListener('resize', updateVideoRect);
+
         screenContainer.addEventListener('mousemove', (e) => {
             if (!isConnected) return;
             
-            // Custom kursorni ekran bo'ylab yurgizish
             customCursor.style.left = (e.clientX) + 'px';
             customCursor.style.top = (e.clientY) + 'px';
 
-            const rect = getVideoContentRect(remoteVideo);
+            if (!cachedVideoRect) updateVideoRect();
+            const rect = cachedVideoRect;
 
-            // Agar sichqoncha video qismidan tashqarida bo'lsa, koordinata yubormaymiz
             if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
                 return;
             }
@@ -266,6 +271,13 @@
             if (!isConnected) return;
             sendInput({ action: 'mouseup', button: e.button });
         });
+
+        // Sichqoncha o'rtasidagi g'ildirakni (scroll) qo'llab-quvvatlash
+        screenContainer.addEventListener('wheel', (e) => {
+            if (!isConnected) return;
+            e.preventDefault();
+            sendInput({ action: 'wheel', deltaY: e.deltaY });
+        }, { passive: false });
 
         screenContainer.addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -481,6 +493,8 @@
                         remoteVideo.play().catch(err => {
                             console.log("Autoplay blocked:", err);
                         });
+
+                        setTimeout(updateVideoRect, 200);
                     }
                 };
             }
