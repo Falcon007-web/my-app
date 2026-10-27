@@ -272,11 +272,17 @@
             sendInput({ action: 'mouseup', button: e.button });
         });
 
-        // Sichqoncha o'rtasidagi g'ildirakni (scroll) qo'llab-quvvatlash
+        // Sichqoncha g'ildiragi (scroll / wheel) to'g'ri ishlashi uchun
         screenContainer.addEventListener('wheel', (e) => {
             if (!isConnected) return;
             e.preventDefault();
-            sendInput({ action: 'wheel', deltaY: e.deltaY });
+            if (!cachedVideoRect) updateVideoRect();
+            const rect = cachedVideoRect;
+
+            const x = (e.clientX - rect.left) / rect.width;
+            const y = (e.clientY - rect.top) / rect.height;
+
+            sendInput({ action: 'wheel', deltaY: e.deltaY, x: x, y: y });
         }, { passive: false });
 
         screenContainer.addEventListener('contextmenu', (e) => e.preventDefault());
