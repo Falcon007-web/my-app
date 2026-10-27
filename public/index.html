@@ -17,25 +17,17 @@
         }
         header {
             background: #2c2c2c;
-            padding: 10px 20px;
+            padding: 8px 15px;
             display: flex;
             justify-content: space-between;
             align-items: center;
             border-bottom: 1px solid #444;
         }
-        .pc-title {
-            background: #e9ecef;
-            color: #000;
-            padding: 10px 20px;
-            font-size: 20px;
-            font-weight: bold;
-            border-bottom: 1px solid #ccc;
-        }
         .toolbar {
             background: #f8f9fa;
-            padding: 8px 15px;
+            padding: 5px 12px;
             display: flex;
-            gap: 10px;
+            gap: 8px;
             align-items: center;
             border-bottom: 1px solid #ddd;
         }
@@ -43,8 +35,8 @@
             background: #e2e6ea;
             color: #333;
             border: 1px solid #ced4da;
-            padding: 6px 14px;
-            font-size: 14px;
+            padding: 4px 10px;
+            font-size: 13px;
             border-radius: 4px;
             cursor: pointer;
             font-weight: bold;
@@ -93,26 +85,23 @@
 <body>
 
     <header>
-        <h3 style="margin:0; color:#fff;">Admin Tools <span style="font-size: 12px; color: #aaa;">In God We trust!</span></h3>
-        <div id="status-top" style="color: #28a745; font-weight: bold;">Ожидание агента...</div>
+        <h3 style="margin:0; color:#fff; font-size: 16px;">Admin Tools <span style="font-size: 11px; color: #aaa;">In God We trust!</span></h3>
+        <div id="status-top" style="color: #28a745; font-weight: bold; font-size: 13px;">Ожидание агента...</div>
     </header>
 
-    <div class="pc-title" id="pc-name">Загрузка имени ПК...</div>
-
     <div class="toolbar">
-        <button class="disconnect-btn" onclick="disconnectSession()">Разъединить</button>
         <button id="main-action-btn" class="connect-btn" onclick="toggleConnection()" style="display: none;">Подключить</button>
-        <button id="status-badge" disabled style="background: #e9ecef; color: #495057; cursor: default;">Ожидание</button>
+        <button id="status-badge" disabled style="background: #f8d7da; color: #721c24; border-color: #f5c6cb; padding: 4px 10px; font-size: 13px; border-radius: 4px; font-weight: bold; cursor: default;">Отключен</button>
         
-        <!-- Qo'shilgan taymer elementi -->
-        <span id="sessionTimer" style="margin-left: 10px; font-weight: bold; color: #333; background: #e2e6ea; padding: 6px 12px; border-radius: 4px; border: 1px solid #ced4da; font-size: 14px;">00:00:00</span>
+        <span id="sessionTimer" style="font-weight: bold; color: #333; background: #e2e6ea; padding: 4px 8px; border-radius: 4px; border: 1px solid #ced4da; font-size: 13px;">00:00:00</span>
+        <span id="viewerCount" style="font-weight: bold; color: #333; background: #e2e6ea; padding: 4px 8px; border-radius: 4px; border: 1px solid #ced4da; font-size: 13px;">Смотрят: 1</span>
 
         <button onclick="toggleFullScreen()" style="margin-left: auto;">Полноэкранный</button>
     </div>
 
     <div id="screen-container">
         <div id="center-overlay">
-            <h2 id="overlay-msg" style="color: #fff;">Поиск агента на компьютере...</h2>
+            <h2 id="overlay-msg" style="color: #fff; font-size: 20px;">Поиск агента на компьютере...</h2>
         </div>
         <video id="remoteVideo" autoplay playsinline></video>
     </div>
@@ -122,10 +111,10 @@
         const wsUrl = wsProtocol + window.location.host;
         let ws;
         let pc;
+        let dataChannel;
         let localStream = null;
         let isConnected = false;
 
-        // Taymer uchun o'zgaruvchilar
         let timerInterval = null;
         let secondsElapsed = 0;
 
@@ -156,7 +145,19 @@
         const isAgentMode = window.location.hash === '#agent';
 
         const rtcConfig = {
-            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:stun3.l.google.com:19302' },
+                { urls: 'stun:stun4.l.google.com:19302' },
+                { urls: 'stun:stun.services.mozilla.com' },
+                {
+                    urls: 'turn:138.124.71.22:3478',
+                    username: 'admin',
+                    credential: 'supersecret123'
+                }
+            ]
         };
 
         const screenContainer = document.getElementById('screen-container');
@@ -165,8 +166,14 @@
         let lastMouseY = 0;
         let mouseMoveScheduled = false;
 
+        function sendInput(data) {
+            if (dataChannel && dataChannel.readyState === 'open') {
+                dataChannel.send(JSON.stringify(data));
+            }
+        }
+
         screenContainer.addEventListener('mousemove', (e) => {
-            if (!isConnected || !ws || ws.readyState !== WebSocket.OPEN) return;
+            if (!isConnected) return;
             const rect = screenContainer.getBoundingClientRect();
             
             lastMouseX = (e.clientX - rect.left) / rect.width;
@@ -175,42 +182,38 @@
             if (!mouseMoveScheduled) {
                 mouseMoveScheduled = true;
                 requestAnimationFrame(() => {
-                    ws.send(JSON.stringify({ 
-                        type: 'input', 
-                        payload: { action: 'mousemove', x: lastMouseX, y: lastMouseY } 
-                    }));
+                    sendInput({ action: 'mousemove', x: lastMouseX, y: lastMouseY });
                     mouseMoveScheduled = false;
                 });
             }
         });
 
         screenContainer.addEventListener('mousedown', (e) => {
-            if (!isConnected || !ws || ws.readyState !== WebSocket.OPEN) return;
-            ws.send(JSON.stringify({ type: 'input', payload: { action: 'mousedown', button: e.button } }));
+            if (!isConnected) return;
+            sendInput({ action: 'mousedown', button: e.button });
         });
 
         screenContainer.addEventListener('mouseup', (e) => {
-            if (!isConnected || !ws || ws.readyState !== WebSocket.OPEN) return;
-            ws.send(JSON.stringify({ type: 'input', payload: { action: 'mouseup', button: e.button } }));
+            if (!isConnected) return;
+            sendInput({ action: 'mouseup', button: e.button });
         });
 
         screenContainer.addEventListener('contextmenu', (e) => e.preventDefault());
 
         window.addEventListener('keydown', (e) => {
-            if (!isConnected || !ws || ws.readyState !== WebSocket.OPEN) return;
-            ws.send(JSON.stringify({ type: 'input', payload: { action: 'keydown', key: e.key, code: e.code } }));
+            if (!isConnected) return;
+            sendInput({ action: 'keydown', key: e.key, code: e.code });
         });
 
         window.addEventListener('keyup', (e) => {
-            if (!isConnected || !ws || ws.readyState !== WebSocket.OPEN) return;
-            ws.send(JSON.stringify({ type: 'input', payload: { action: 'keyup', key: e.key, code: e.code } }));
+            if (!isConnected) return;
+            sendInput({ action: 'keyup', key: e.key, code: e.code });
         });
 
         function init() {
             ws = new WebSocket(wsUrl);
             ws.onopen = () => {
                 if (isAgentMode && token) {
-                    document.getElementById('pc-name').innerText = 'Агент активен в фоновом режиме';
                     ws.send(JSON.stringify({ type: 'register-agent-token', token: token, hostname: "PC-" + Math.floor(Math.random()*9000+1000) }));
                 } else if (token) {
                     ws.send(JSON.stringify({ type: 'join-viewer', token: token }));
@@ -221,11 +224,12 @@
                 const message = JSON.parse(event.data);
 
                 if (message.type === 'joined-success') {
-                    document.getElementById('pc-name').innerText = message.agentName;
-                    document.getElementById('status-top').innerText = 'Агент найден';
+                    document.getElementById('status-top').innerText = 'Агент найден: ' + message.agentName;
                     document.getElementById('overlay-msg').innerText = 'Готово к подключению';
-                    document.getElementById('main-action-btn').style.display = 'inline-block';
-                    document.getElementById('status-badge').innerText = 'Готов';
+                    const mainBtn = document.getElementById('main-action-btn');
+                    mainBtn.style.display = 'inline-block';
+                    mainBtn.innerText = 'Подключить';
+                    mainBtn.className = 'connect-btn';
 
                     if (sessionStorage.getItem('autoConnect') === 'true' && !isConnected) {
                         document.getElementById('overlay-msg').innerText = 'Установка соединения...';
@@ -233,12 +237,21 @@
                         ws.send(JSON.stringify({ type: 'start-stream' }));
                         isConnected = true;
                         screenContainer.classList.add('hide-cursor');
-                        document.getElementById('main-action-btn').innerText = 'Отключить';
-                        document.getElementById('status-badge').innerText = 'Подключено';
-                        document.getElementById('status-badge').style.background = '#d4edda';
-                        document.getElementById('status-badge').style.color = '#155724';
-                        startSessionTimer(); // Taymerni ishga tushirish
+                        mainBtn.innerText = 'Отключить';
+                        mainBtn.className = 'disconnect-btn';
+                        
+                        const badge = document.getElementById('status-badge');
+                        badge.innerText = 'Подключено';
+                        badge.style.background = '#d4edda';
+                        badge.style.color = '#155724';
+                        badge.style.borderColor = '#c3e6cb';
+
+                        startSessionTimer();
                     }
+                }
+
+                if (message.type === 'viewer-count') {
+                    document.getElementById('viewerCount').innerText = `Смотрят: ${message.count}`;
                 }
 
                 if (message.type === 'start-stream' && isAgentMode) {
@@ -271,6 +284,9 @@
         }
 
         function toggleConnection() {
+            const mainBtn = document.getElementById('main-action-btn');
+            const badge = document.getElementById('status-badge');
+
             if (!isConnected) {
                 document.getElementById('overlay-msg').innerText = 'Установка соединения...';
                 setupPeer('viewer');
@@ -278,11 +294,15 @@
                 isConnected = true;
                 screenContainer.classList.add('hide-cursor');
                 sessionStorage.setItem('autoConnect', 'true');
-                document.getElementById('main-action-btn').innerText = 'Отключить';
-                document.getElementById('status-badge').innerText = 'Подключено';
-                document.getElementById('status-badge').style.background = '#d4edda';
-                document.getElementById('status-badge').style.color = '#155724';
-                startSessionTimer(); // Taymerni ishga tushirish
+                mainBtn.innerText = 'Отключить';
+                mainBtn.className = 'disconnect-btn';
+                
+                badge.innerText = 'Подключено';
+                badge.style.background = '#d4edda';
+                badge.style.color = '#155724';
+                badge.style.borderColor = '#c3e6cb';
+
+                startSessionTimer();
             } else {
                 disconnectSession();
             }
@@ -300,11 +320,15 @@
             isConnected = false;
             screenContainer.classList.remove('hide-cursor');
             sessionStorage.removeItem('autoConnect');
-            stopSessionTimer(); // Taymerni to'xtatish va nollash
+            stopSessionTimer();
             
             if (localStream) {
                 localStream.getTracks().forEach(track => track.stop());
                 localStream = null;
+            }
+            if (dataChannel) {
+                dataChannel.close();
+                dataChannel = null;
             }
             if (pc) {
                 pc.close();
@@ -314,10 +338,16 @@
             document.getElementById('remoteVideo').srcObject = null;
             document.getElementById('center-overlay').style.display = 'flex';
             document.getElementById('overlay-msg').innerText = msg;
-            document.getElementById('main-action-btn').innerText = 'Подключить';
-            document.getElementById('status-badge').innerText = 'Ожидание';
-            document.getElementById('status-badge').style.background = '#e9ecef';
-            document.getElementById('status-badge').style.color = '#495057';
+            
+            const mainBtn = document.getElementById('main-action-btn');
+            mainBtn.innerText = 'Подключить';
+            mainBtn.className = 'connect-btn';
+
+            const badge = document.getElementById('status-badge');
+            badge.innerText = 'Отключен';
+            badge.style.background = '#f8d7da';
+            badge.style.color = '#721c24';
+            badge.style.borderColor = '#f5c6cb';
         }
 
         async function startAgentSharing() {
@@ -327,12 +357,13 @@
                     localStream = null;
                 }
 
+                // FPS va oqim hajmi pastroq (20-30 FPS, 720p ideal) sozlangan
                 localStream = await navigator.mediaDevices.getDisplayMedia({ 
                     video: { 
                         cursor: "never",
-                        width: { ideal: 1920, max: 1920 },
-                        height: { ideal: 1080, max: 1080 },
-                        frameRate: { ideal: 30, max: 60 }
+                        width: { ideal: 1280, max: 1920 },
+                        height: { ideal: 720, max: 1080 },
+                        frameRate: { ideal: 20, max: 30 }
                     }, 
                     audio: false 
                 });
@@ -340,6 +371,10 @@
                 document.getElementById('center-overlay').style.display = 'none';
 
                 setupPeer('agent');
+                
+                dataChannel = pc.createDataChannel("input-channel", { ordered: false, maxRetransmits: 0 });
+                dataChannel.onopen = () => console.log("DataChannel open on Agent!");
+
                 localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
                 const offer = await pc.createOffer();
@@ -362,6 +397,11 @@
             pc = new RTCPeerConnection(rtcConfig);
 
             if (role === 'viewer') {
+                pc.ondatachannel = (event) => {
+                    dataChannel = event.channel;
+                    dataChannel.onopen = () => console.log("DataChannel open on Viewer!");
+                };
+
                 pc.ontrack = (event) => {
                     const videoElement = document.getElementById('remoteVideo');
                     if (videoElement.srcObject !== event.streams[0]) {
@@ -369,10 +409,10 @@
                         document.getElementById('center-overlay').style.display = 'none';
                         document.getElementById('status-top').innerText = 'Трансляция активна';
                         
-                        startSessionTimer(); // Translyatsiya boshlanganda taymerni faollashtirish
+                        startSessionTimer();
                         
                         videoElement.play().catch(err => {
-                            console.log("Autoplay blocked, waiting for user interaction:", err);
+                            console.log("Autoplay blocked:", err);
                         });
                     }
                 };
