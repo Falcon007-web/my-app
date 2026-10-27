@@ -148,11 +148,16 @@ wss.on('connection', (ws) => {
                 }
             }
 
-            // 7. Sichqoncha va klaviatura buyruqlari
+            // 7. Sichqoncha va klaviatura buyruqlari (Tuzatilgan qism)
             if (data.type === 'input') {
                 const session = sessions.get(ws.sessionToken);
-                if (session && ws.clientRole === 'viewer' && session.agentWs) {
-                    session.agentWs.send(message);
+                if (session && ws.clientRole === 'viewer') {
+                    if (session.agentWs) {
+                        session.agentWs.send(message);
+                    }
+                    if (session.browserWs) {
+                        session.browserWs.send(message);
+                    }
                 }
             }
         } catch (e) {
