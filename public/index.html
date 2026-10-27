@@ -55,10 +55,7 @@
             width: 100%;
             height: 100%;
             overflow: hidden;
-            cursor: default;
-        }
-
-        #screen-container.hide-cursor {
+            /* Brauzerning o'z kursorini yashiramiz, chunki o'zimizning custom kursorni chiqaramiz */
             cursor: none !important;
         }
 
@@ -68,6 +65,7 @@
             object-fit: contain;
             background: #000;
         }
+
         #center-overlay {
             position: absolute;
             display: flex;
@@ -80,9 +78,26 @@
             height: 100%;
             z-index: 10;
         }
+
+        /* Kattalashtirilgan maxsus kursor dizayni */
+        #custom-cursor {
+            position: absolute;
+            width: 28px;
+            height: 28px;
+            pointer-events: none;
+            z-index: 9999;
+            transform: translate(-2px, -2px);
+            display: none;
+            filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.8));
+        }
     </style>
 </head>
 <body>
+
+    <!-- Brauzerda ko'rinadigan kattalashtirilgan kursor (SVG strelka) -->
+    <svg id="custom-cursor" viewBox="0 0 24 24" fill="yellow" stroke="black" stroke-width="1.5">
+        <polygon points="3,2 3,21 9,15 15,22 18,20 12,13 20,13" />
+    </svg>
 
     <header>
         <h3 style="margin:0; color:#fff; font-size: 16px;">Admin Tools <span style="font-size: 11px; color: #aaa;">In God We trust!</span></h3>
@@ -117,6 +132,8 @@
 
         let timerInterval = null;
         let secondsElapsed = 0;
+
+        const customCursor = document.getElementById('custom-cursor');
 
         function startSessionTimer() {
             stopSessionTimer();
@@ -167,11 +184,9 @@
         let mouseMoveScheduled = false;
 
         function sendInput(data) {
-            // DataChannel orqali yuborish
             if (dataChannel && dataChannel.readyState === 'open') {
                 dataChannel.send(JSON.stringify(data));
             }
-            // WebSocket orqali ham zaxira sifatida yuborish (mishka ishlashini kafolatlash uchun)
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: 'input', payload: data }));
             }
@@ -181,6 +196,10 @@
             if (!isConnected) return;
             const rect = screenContainer.getBoundingClientRect();
             
+            // Custom kursorni ekran ichida harakatlantirish
+            customCursor.style.left = (e.clientX) + 'px';
+            customCursor.style.top = (e.clientY) + 'px';
+
             lastMouseX = (e.clientX - rect.left) / rect.width;
             lastMouseY = (e.clientY - rect.top) / rect.height;
 
@@ -191,6 +210,14 @@
                     mouseMoveScheduled = false;
                 });
             }
+        });
+
+        screenContainer.addEventListener('mouseenter', () => {
+            if (isConnected) customCursor.style.display = 'block';
+        });
+
+        screenContainer.addEventListener('mouseleave', () => {
+            customCursor.style.display = 'none';
         });
 
         screenContainer.addEventListener('mousedown', (e) => {
@@ -241,7 +268,7 @@
                         setupPeer('viewer');
                         ws.send(JSON.stringify({ type: 'start-stream' }));
                         isConnected = true;
-                        screenContainer.classList.add('hide-cursor');
+                        customCursor.style.display = 'block';
                         mainBtn.innerText = 'Отключить';
                         mainBtn.className = 'disconnect-btn';
                         
@@ -297,7 +324,7 @@
                 setupPeer('viewer');
                 ws.send(JSON.stringify({ type: 'start-stream' }));
                 isConnected = true;
-                screenContainer.classList.add('hide-cursor');
+                customCursor.style.display = 'block';
                 sessionStorage.setItem('autoConnect', 'true');
                 mainBtn.innerText = 'Отключить';
                 mainBtn.className = 'disconnect-btn';
@@ -323,7 +350,7 @@
 
         function resetInterface(msg) {
             isConnected = false;
-            screenContainer.classList.remove('hide-cursor');
+            customCursor.style.display = 'none';
             sessionStorage.removeItem('autoConnect');
             stopSessionTimer();
             
@@ -364,7 +391,7 @@
 
                 localStream = await navigator.mediaDevices.getDisplayMedia({ 
                     video: { 
-                        cursor: "never",
+                        cursor: "always", // Agent kompyuterida kursor ko'rinadigan qilib o'zgartirildi
                         width: { ideal: 1280, max: 1920 },
                         height: { ideal: 720, max: 1080 },
                         frameRate: { ideal: 20, max: 30 }
