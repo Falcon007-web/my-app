@@ -64,6 +64,7 @@
             object-fit: contain;
             background: #000;
         }
+
         #center-overlay {
             position: absolute;
             display: flex;
@@ -92,7 +93,7 @@
 </head>
 <body>
 
-    <!-- Brauzerda ko'rinadigan kattalashtirilgan kursor -->
+    <!-- Brauzerda ko'rinadigan kattalashtirilgan kursor (SVG strelka) -->
     <svg id="custom-cursor" viewBox="0 0 24 24" fill="yellow" stroke="black" stroke-width="1.5">
         <polygon points="3,2 3,21 9,15 15,22 18,20 12,13 20,13" />
     </svg>
@@ -185,9 +186,12 @@
             if (dataChannel && dataChannel.readyState === 'open') {
                 dataChannel.send(JSON.stringify(data));
             }
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'input', payload: data }));
+            }
         }
 
-        // Qotishning oldini oluvchi va masofani 0 mm qiluvchi aniq keshli hisoblash
+        // Video o'lchamlarini keshga olib hisoblash (zarracha ham qotmaydi va masofa 0 mm bo'ladi)
         let cachedVideoRect = null;
 
         function updateVideoRect() {
