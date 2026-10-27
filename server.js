@@ -10,23 +10,12 @@ const wss = new Server({ server });
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// token -> { agentWs, browserWs, viewers: Set(), agentName }
+// token -> { agentWs, browserWs, viewerWs, agentName }
 const sessions = new Map();
 
 app.get('/sharing', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
-
-function broadcastViewerCount(session) {
-    if (!session) return;
-    const count = session.viewers.size;
-    const message = JSON.stringify({ type: 'viewer-count', count: count });
-    for (const viewerWs of session.viewers) {
-        if (viewerWs.readyState === viewerWs.OPEN) {
-            viewerWs.send(message);
-        }
-    }
-}
 
 wss.on('connection', (ws) => {
     ws.isAlive = true;
@@ -36,12 +25,12 @@ wss.on('connection', (ws) => {
         try {
             const data = JSON.parse(message);
 
-            // 1. Asosiy Agent ro'yxatdan o'tishi
+            // 1. Asosiy Agent birinchi marta ro'yxatdan o'tishi
             if (data.type === 'register-agent') {
                 const token = uuidv4().replace(/-/g, '') + uuidv4().replace(/-/g, '');
                 const agentName = data.hostname || 'REMOTE-PC';
                 
-                sessions.set(token, { agentWs: ws, browserWs: null, viewers: new Set(), agentName: agentName });
+                sessions.set(token, { agentWs: ws, browserWs: null, viewerWs: null, agentName: agentName });
                 ws.sessionToken = token;
                 ws.clientRole = 'agent';
 
@@ -58,11 +47,11 @@ wss.on('connection', (ws) => {
                 console.log('========================================\n');
             }
 
-            // 1.1. Agent qayta ulanishi
+            // 1.1. Agent internet o'chib yonganda eski tokeni bilan qayta ulanishi
             if (data.type === 'register-agent-back') {
                 let session = sessions.get(data.token);
                 if (!session) {
-                    session = { agentWs: ws, browserWs: null, viewers: new Set(), agentName: data.hostname || 'REMOTE-PC' };
+                    session = { agentWs: ws, browserWs: null, viewerWs: null, agentName: data.hostname || 'REMOTE-PC' };
                     sessions.set(data.token, session);
                 } else {
                     session.agentWs = ws;
@@ -74,6 +63,11 @@ wss.on('connection', (ws) => {
 
                 const sharingUrl = 'https://admin.falconsupportsession.com/sharing?c=' + data.token;
                 
+                console.log('\n----------------------------------------');
+                console.log(`AGENT QAYTA ULANDI: [ ${session.agentName} ]`);
+                console.log(`SHARING URL: ${sharingUrl}`);
+                console.log('----------------------------------------\n');
+
                 ws.send(JSON.stringify({
                     type: 'registered',
                     sharingUrl: sharingUrl
@@ -84,7 +78,7 @@ wss.on('connection', (ws) => {
                 }
             }
 
-            // 2. Puppeteer Brauzer ulanishi
+            // 2. Puppeteer Brauzer ulanishi (WebRTC uchun)
             if (data.type === 'register-agent-token') {
                 let session = sessions.get(data.token);
                 if (session) {
@@ -105,12 +99,11 @@ wss.on('connection', (ws) => {
                 }
             }
 
-            // 3. Viewer ulanishi
+            // 3. Viewer (Operator) ulanishi
             if (data.type === 'join-viewer') {
                 let session = sessions.get(data.token);
                 if (session) {
-                    session.viewerWs = ws; // Asl ishlaydigan o'zgaruvchi qaytarildi
-                    session.viewers.add(ws);
+                    session.viewerWs = ws;
                     ws.sessionToken = data.token;
                     ws.clientRole = 'viewer';
                     
@@ -118,22 +111,18 @@ wss.on('connection', (ws) => {
                         type: 'joined-success', 
                         agentName: session.agentName || 'REMOTE-PC' 
                     }));
-
-                    broadcastViewerCount(session);
                     console.log(`[OPERATOR KIRDI] Kompyuter: ${session.agentName}`);
                 } else {
                     ws.send(JSON.stringify({ type: 'error', message: 'Session not found!' }));
                 }
             }
 
-            // 4. Stream boshlash (Asl ishlaydigan holatiga qaytarildi)
+            // 4. Stream boshlash
             if (data.type === 'start-stream') {
                 const session = sessions.get(ws.sessionToken);
                 if (session && session.browserWs) {
                     session.viewerWs = ws;
-                    session.viewers.add(ws);
                     session.browserWs.send(JSON.stringify({ type: 'start-stream' }));
-                    broadcastViewerCount(session);
                     console.log(`[STREAM] Boshlandi: ${session.agentName}`);
                 }
             }
@@ -143,13 +132,11 @@ wss.on('connection', (ws) => {
                 const session = sessions.get(ws.sessionToken);
                 if (session && session.viewerWs === ws) {
                     session.viewerWs = null;
-                    session.viewers.delete(ws);
-                    broadcastViewerCount(session);
                     console.log(`[OPERATOR CHIQDI] Kompyuter: ${session.agentName}`);
                 }
             }
 
-            // 6. WebRTC Signallar (Asl ishlaydigan qism)
+            // 6. WebRTC Signallar
             if (data.type === 'signal') {
                 const session = sessions.get(ws.sessionToken);
                 if (session) {
@@ -158,6 +145,14 @@ wss.on('connection', (ws) => {
                     } else if (ws.clientRole === 'browser' && session.viewerWs) {
                         session.viewerWs.send(JSON.stringify({ type: 'signal', payload: data.payload }));
                     }
+                }
+            }
+
+            // 7. Sichqoncha va klaviatura buyruqlari
+            if (data.type === 'input') {
+                const session = sessions.get(ws.sessionToken);
+                if (session && ws.clientRole === 'viewer' && session.agentWs) {
+                    session.agentWs.send(message);
                 }
             }
         } catch (e) {
@@ -172,10 +167,8 @@ wss.on('connection', (ws) => {
                 console.log(`[AGENT UZILDI] Kompyuter: ${session.agentName} (Token saqlandi)`);
             } else if (session.browserWs === ws) {
                 session.browserWs = null;
-            } else if (session.viewerWs === ws || (session.viewers && session.viewers.has(ws))) {
+            } else if (session.viewerWs === ws) {
                 session.viewerWs = null;
-                session.viewers.delete(ws);
-                broadcastViewerCount(session);
             }
         });
     });
@@ -188,6 +181,10 @@ const interval = setInterval(() => {
         ws.ping();
     });
 }, 30000);
+
+wss.on('close', () => {
+    clearInterval(interval);
+});
 
 const PORT = 3030;
 server.listen(PORT, () => {
