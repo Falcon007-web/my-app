@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Tools - Remote Desktop</title>
+    <style>
+        body {
+            margin: 0;
+            background: #1a1a1a;
+            color: #fff;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+        header {
+            background: #2c2c2c;
+            padding: 8px 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #444;
+        }
+        .toolbar {
+            background: #f8f9fa;
+            padding: 5px 12px;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            border-bottom: 1px solid #ddd;
+        }
+        button {
+            background: #e2e6ea;
+            color: #333;
+            border: 1px solid #ced4da;
+            padding: 4px 10px;
+            font-size: 13px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        button:hover { background: #dae0e5; }
+        button.disconnect-btn { background: #f8d7da; color: #721c24; border-color: #f5c6cb; }
+        button.connect-btn { background: #d4edda; color: #155724; border-color: #c3e6cb; }
+
+        #screen-container {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+            background: #000;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            cursor: none !important;
+            outline: none;
+        }
+
+        #remoteScreen {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #000;
+        }
+
+        #center-overlay {
+            position: absolute;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            background: rgba(0,0,0,0.85);
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+        }
+
+        #custom-cursor {
+            position: absolute;
+            width: 28px;
+            height: 28px;
+            pointer-events: none;
+            z-index: 9999;
+            transform: translate(-2px, -2px);
+            display: none;
+            filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.8));
+        }
+    </style>
+</head>
+<body tabindex="0">
+
+    <svg id="custom-cursor" viewBox="0 0 24 24" fill="yellow" stroke="black" stroke-width="1.5">
+        <polygon points="3,2 3,21 9,15 15,22 18,20 12,13 20,13" />
+    </svg>
+
+    <header>
+        <h3 style="margin:0; color:#fff; font-size: 16px;">Admin Tools <span style="font-size: 11px; color: #aaa;">In God We trust!</span></h3>
+        <div id="status-top" style="color: #28a745; font-weight: bold; font-size: 13px;">Ожидание агента...</div>
+    </header>
+
+    <div class="toolbar">
+        <button id="main-action-btn" class="connect-btn" onclick="toggleConnection()" style="display: none;">Подключить</button>
+        <button id="status-badge" disabled style="background: #f8d7da; color: #721c24; border-color: #f5c6cb; padding: 4px 10px; font-size: 13px; border-radius: 4px; font-weight: bold; cursor: default;">Отключен</button>
+        
+        <span id="sessionTimer" style="font-weight: bold; color: #333; background: #e2e6ea; padding: 4px 8px; border-radius: 4px; border: 1px solid #ced4da; font-size: 13px;">00:00:00</span>
+        <span id="viewerCount" style="font-weight: bold; color: #333; background: #e2e6ea; padding: 4px 8px; border-radius: 4px; border: 1px solid #ced4da; font-size: 13px;">Смотрят: 1</span>
+
+        <button onclick="toggleFullScreen()" style="margin-left: auto;">Полноэкранный</button>
+    </div>
+
+    <div id="screen-container" tabindex="0">
+        <div id="center-overlay">
+            <h2 id="overlay-msg" style="color: #fff; font-size: 20px;">Поиск агента на компьютере...</h2>
+        </div>
+        <img id="remoteScreen" alt="Screen Stream">
+    </div>
+
+    <script>
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+        const wsUrl = wsProtocol + window.location.host;
+        let ws;
+        let isConnected = false;
+
+        let timerInterval = null;
+        let secondsElapsed = 0;
+
+        const customCursor = document.getElementById('custom-cursor');
+        const remoteScreen = document.getElementById('remoteScreen');
+        const screenContainer = document.getElementById('screen-container');
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('c');
+
+        function startSessionTimer() {
+            stopSessionTimer();
+            secondsElapsed = 0;
+            const timerElement = document.getElementById('sessionTimer');
+            
+            timerInterval = setInterval(() => {
+                secondsElapsed++;
+                const hrs = Math.floor(secondsElapsed / 3600).toString().padStart(2, '0');
+                const mins = Math.floor((secondsElapsed % 3600) / 60).toString().padStart(2, '0');
+                const secs = (secondsElapsed % 60).toString().padStart(2, '0');
+                timerElement.innerText = `${hrs}:${mins}:${secs}`;
+            }, 1000);
+        }
+
+        function stopSessionTimer() {
+            if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+            }
+            document.getElementById('sessionTimer').innerText = '00:00:00';
+        }
+
+        function init() {
+            ws = new WebSocket(wsUrl);
+            ws.binaryType = 'blob';
+
+            ws.onopen = () => {
+                if (token) {
+                    ws.send(JSON.stringify({ type: 'join-viewer', token: token }));
+                }
+            };
+
+            ws.onmessage = async (event) => {
+                if (event.data instanceof Blob) {
+                    const url = URL.createObjectURL(event.data);
+                    remoteScreen.src = url;
+                    remoteScreen.onload = () => { URL.revokeObjectURL(url); };
+                } else {
+                    try {
+                        const message = JSON.parse(event.data);
+                        if (message.type === 'joined-success') {
+                            document.getElementById('status-top').innerText = 'Агент найден: ' + (message.agentName || 'Remote-PC');
+                            document.getElementById('overlay-msg').innerText = 'Готово к подключению';
+                            
+                            const mainBtn = document.getElementById('main-action-btn');
+                            mainBtn.style.display = 'inline-block';
+                            mainBtn.innerText = 'Подключить';
+                            mainBtn.className = 'connect-btn';
+                        }
+                        if (message.type === 'disconnected') {
+                            resetInterface("Сессия завершена / разорвана");
+                        }
+                    } catch (e) {}
+                }
+            };
+        }
+
+        function toggleConnection() {
+            const mainBtn = document.getElementById('main-action-btn');
+            const badge = document.getElementById('status-badge');
+
+            if (!isConnected) {
+                document.getElementById('center-overlay').style.display = 'none';
+                isConnected = true;
+                customCursor.style.display = 'block';
+                screenContainer.focus();
+                
+                mainBtn.innerText = 'Отключить';
+                mainBtn.className = 'disconnect-btn';
+                
+                badge.innerText = 'Подключено';
+                badge.style.background = '#d4edda';
+                badge.style.color = '#155724';
+                badge.style.borderColor = '#c3e6cb';
+
+                startSessionTimer();
+            } else {
+                resetInterface("Соединение разорвано");
+            }
+        }
+
+        function resetInterface(msg) {
+            isConnected = false;
+            customCursor.style.display = 'none';
+            stopSessionTimer();
+            
+            remoteScreen.src = '';
+            document.getElementById('center-overlay').style.display = 'flex';
+            document.getElementById('overlay-msg').innerText = msg;
+            
+            const mainBtn = document.getElementById('main-action-btn');
+            mainBtn.innerText = 'Подключить';
+            mainBtn.className = 'connect-btn';
+
+            const badge = document.getElementById('status-badge');
+            badge.innerText = 'Отключен';
+            badge.style.background = '#f8d7da';
+            badge.style.color = '#721c24';
+            badge.style.borderColor = '#f5c6cb';
+        }
+
+        let lastMouseNormX = 0;
+        let lastMouseNormY = 0;
+        let isMouseMovePending = false;
+
+        remoteScreen.addEventListener('mousemove', (e) => {
+            if (!isConnected) return;
+
+            const rect = remoteScreen.getBoundingClientRect();
+            const naturalWidth = remoteScreen.naturalWidth || 1920;
+            const naturalHeight = remoteScreen.naturalHeight || 1080;
+
+            const clientWidth = rect.width;
+            const clientHeight = rect.height;
+
+            const imageRatio = naturalWidth / naturalHeight;
+            const clientRatio = clientWidth / clientHeight;
+
+            let renderWidth, renderHeight, offsetX, offsetY;
+
+            if (clientRatio > imageRatio) {
+                renderHeight = clientHeight;
+                renderWidth = clientHeight * imageRatio;
+                offsetX = (clientWidth - renderWidth) / 2;
+                offsetY = 0;
+            } else {
+                renderWidth = clientWidth;
+                renderHeight = clientWidth / imageRatio;
+                offsetX = 0;
+                offsetY = (clientHeight - renderHeight) / 2;
+            }
+
+            const mouseXInElement = e.clientX - rect.left;
+            const mouseYInElement = e.clientY - rect.top;
+
+            if (
+                mouseXInElement < offsetX || mouseXInElement > (offsetX + renderWidth) ||
+                mouseYInElement < offsetY || mouseYInElement > (offsetY + renderHeight)
+            ) {
+                customCursor.style.display = 'none';
+                return;
+            } else {
+                customCursor.style.display = 'block';
+            }
+
+            customCursor.style.left = e.clientX + 'px';
+            customCursor.style.top = e.clientY + 'px';
+
+            lastMouseNormX = (mouseXInElement - offsetX) / renderWidth;
+            lastMouseNormY = (mouseYInElement - offsetY) / renderHeight;
+
+            if (!isMouseMovePending) {
+                isMouseMovePending = true;
+                requestAnimationFrame(() => {
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ action: 'mousemove', x: lastMouseNormX, y: lastMouseNormY }));
+                    }
+                    isMouseMovePending = false;
+                });
+            }
+        });
+
+        screenContainer.addEventListener('mouseenter', () => { if (isConnected) customCursor.style.display = 'block'; });
+        screenContainer.addEventListener('mouseleave', () => { customCursor.style.display = 'none'; });
+
+        screenContainer.addEventListener('mousedown', (e) => {
+            if (!isConnected) return;
+            e.preventDefault();
+            screenContainer.focus();
+            const button = e.button === 2 ? 'right' : 'left';
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action: 'mousedown', button: button }));
+            }
+        });
+
+        screenContainer.addEventListener('mouseup', (e) => {
+            if (!isConnected) return;
+            e.preventDefault();
+            const button = e.button === 2 ? 'right' : 'left';
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action: 'mouseup', button: button }));
+            }
+        });
+
+        screenContainer.addEventListener('contextmenu', e => e.preventDefault());
+
+        screenContainer.addEventListener('wheel', (e) => {
+            if (!isConnected) return;
+            e.preventDefault();
+            const delta = e.deltaY < 0 ? 3 : -3;
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action: 'scroll', delta: delta }));
+            }
+        });
+
+        // Klaviatura buyruqlarini yuborish
+        window.addEventListener('keydown', (e) => {
+            if (!isConnected) return;
+            e.preventDefault();
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action: 'keydown', keyCode: e.keyCode, key: e.key }));
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (!isConnected) return;
+            e.preventDefault();
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action: 'keyup', keyCode: e.keyCode, key: e.key }));
+            }
+        });
+
+        function toggleFullScreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+            } else {
+                if (document.exitFullscreen) document.exitFullscreen();
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>
