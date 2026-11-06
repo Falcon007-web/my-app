@@ -26,10 +26,10 @@ wss.on('connection', (ws, req) => {
 
     ws.on('message', (message) => {
         try {
-            // WebRTC signaling uchun barcha xabarlar JSON formatida keladi
-            const data = JSON.parse(message.toString());
+            const messageStr = message.toString();
+            const data = JSON.parse(messageStr);
 
-            if (data.type === 'join-agent') {
+            if (data.type === 'join-agent' || data.type === 'register-agent-token') {
                 currentToken = data.token.trim();
                 currentRole = 'agent';
                 if (!sessions.has(currentToken)) {
@@ -53,21 +53,21 @@ wss.on('connection', (ws, req) => {
                     ws.send(JSON.stringify({ type: 'joined-success', agentName: 'Desktop-Agent' }));
                 }
             }
-            // --- WEBRTC SIGNALING (Offer, Answer, ICE Candidates) ---
-            else if (data.type === 'offer' || data.type === 'answer' || data.type === 'candidate') {
+            // --- WEBRTC SIGNALING (Offer, Answer, ICE Candidates va signal turlari) ---
+            else if (data.type === 'offer' || data.type === 'answer' || data.type === 'candidate' || data.type === 'signal') {
                 const session = sessions.get(currentToken);
                 
                 if (currentRole === 'viewer') {
-                    // Brauzerdan kelgan offer/candidate ni Rust Agentga yo'naltiramiz
+                    // Brauzerdan kelgan signalni Rust Agentga yo'naltiramiz
                     if (session && session.agentWs && session.agentWs.readyState === WebSocket.OPEN) {
-                        session.agentWs.send(message.toString());
+                        session.agentWs.send(messageStr);
                     }
                 } else if (currentRole === 'agent') {
-                    // Rust Agentdan kelgan answer/candidate ni brauzerdagi viewer(lar)ga yo'naltiramiz
+                    // Rust Agentdan kelgan signalni brauzerdagi viewer(lar)ga yo'naltiramiz
                     if (session && session.viewers) {
                         for (let viewerWs of session.viewers) {
                             if (viewerWs.readyState === WebSocket.OPEN) {
-                                viewerWs.send(message.toString());
+                                viewerWs.send(messageStr);
                             }
                         }
                     }
