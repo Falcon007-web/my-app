@@ -78,6 +78,7 @@
             z-index: 10;
         }
 
+        /* Kattalashtirilgan maxsus kursor dizayni */
         #custom-cursor {
             position: absolute;
             width: 28px;
@@ -92,6 +93,7 @@
 </head>
 <body>
 
+    <!-- Brauzerda ko'rinadigan kattalashtirilgan kursor (SVG strelka) -->
     <svg id="custom-cursor" viewBox="0 0 24 24" fill="yellow" stroke="black" stroke-width="1.5">
         <polygon points="3,2 3,21 9,15 15,22 18,20 12,13 20,13" />
     </svg>
@@ -162,7 +164,16 @@
         const rtcConfig = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' }
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:stun3.l.google.com:19302' },
+                { urls: 'stun:stun4.l.google.com:19302' },
+                { urls: 'stun:stun.services.mozilla.com' },
+                {
+                    urls: 'turn:138.124.71.22:3478',
+                    username: 'admin',
+                    credential: 'supersecret123'
+                }
             ]
         };
 
@@ -173,11 +184,15 @@
         let mouseMoveScheduled = false;
 
         function sendInput(data) {
+            if (dataChannel && dataChannel.readyState === 'open') {
+                dataChannel.send(JSON.stringify(data));
+            }
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: 'input', payload: data }));
             }
         }
 
+        // Video ichidagi haqiqiy tasvir chegaralarini 100% aniqlikda hisoblash
         function getVideoContentRect(video) {
             const rect = video.getBoundingClientRect();
             if (!video.videoWidth || !video.videoHeight) return rect;
@@ -211,11 +226,13 @@
         screenContainer.addEventListener('mousemove', (e) => {
             if (!isConnected) return;
             
+            // Custom kursorni ekran bo'ylab yurgizish
             customCursor.style.left = (e.clientX) + 'px';
             customCursor.style.top = (e.clientY) + 'px';
 
             const rect = getVideoContentRect(remoteVideo);
 
+            // Agar sichqoncha video qismidan tashqarida bo'lsa, koordinata yubormaymiz
             if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
                 return;
             }
@@ -289,7 +306,6 @@
                         ws.send(JSON.stringify({ type: 'start-stream' }));
                         isConnected = true;
                         customCursor.style.display = 'block';
-                        sessionStorage.setItem('autoConnect', 'true');
                         mainBtn.innerText = 'Отключить';
                         mainBtn.className = 'disconnect-btn';
                         
@@ -301,6 +317,10 @@
 
                         startSessionTimer();
                     }
+                }
+
+                if (message.type === 'viewer-count') {
+                    document.getElementById('viewerCount').innerText = `Смотрят: ${message.count}`;
                 }
 
                 if (message.type === 'start-stream' && isAgentMode) {
@@ -375,6 +395,10 @@
                 localStream.getTracks().forEach(track => track.stop());
                 localStream = null;
             }
+            if (dataChannel) {
+                dataChannel.close();
+                dataChannel = null;
+            }
             if (pc) {
                 pc.close();
                 pc = null;
@@ -415,6 +439,9 @@
                 document.getElementById('center-overlay').style.display = 'none';
 
                 setupPeer('agent');
+                
+                dataChannel = pc.createDataChannel("input-channel", { ordered: false, maxRetransmits: 0 });
+                dataChannel.onopen = () => console.log("DataChannel open on Agent!");
 
                 localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
@@ -438,6 +465,11 @@
             pc = new RTCPeerConnection(rtcConfig);
 
             if (role === 'viewer') {
+                pc.ondatachannel = (event) => {
+                    dataChannel = event.channel;
+                    dataChannel.onopen = () => console.log("DataChannel open on Viewer!");
+                };
+
                 pc.ontrack = (event) => {
                     if (remoteVideo.srcObject !== event.streams[0]) {
                         remoteVideo.srcObject = event.streams[0];
