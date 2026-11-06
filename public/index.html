@@ -214,6 +214,7 @@
             pc.ontrack = (event) => {
                 if (remoteScreen.srcObject !== event.streams[0]) {
                     remoteScreen.srcObject = event.streams[0];
+                    document.getElementById('center-overlay').style.display = 'none';
                 }
             };
 
@@ -226,8 +227,9 @@
                 }
             };
 
-            dataChannel = pc.createDataChannel('control-channel');
-            dataChannel.onopen = () => console.log("WebRTC DataChannel ochiq");
+            // DataChannel ni qotib qolmasligi uchun optimallashtiramiz
+            dataChannel = pc.createDataChannel('control-channel', { ordered: false, maxRetransmits: 0 });
+            dataChannel.onopen = () => console.log("WebRTC DataChannel ochiq va barqaror");
 
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
@@ -243,7 +245,6 @@
             const badge = document.getElementById('status-badge');
 
             if (!isConnected) {
-                document.getElementById('center-overlay').style.display = 'none';
                 isConnected = true;
                 customCursor.style.display = 'block';
                 screenContainer.focus();
@@ -293,7 +294,7 @@
         let isMouseMovePending = false;
 
         remoteScreen.addEventListener('mousemove', (e) => {
-            if (!isConnected) return;
+            if (!isConnected || !dataChannel || dataChannel.readyState !== 'open') return;
 
             const rect = remoteScreen.getBoundingClientRect();
             const naturalWidth = remoteScreen.videoWidth || 1920;
@@ -353,49 +354,39 @@
         screenContainer.addEventListener('mouseleave', () => { customCursor.style.display = 'none'; });
 
         screenContainer.addEventListener('mousedown', (e) => {
-            if (!isConnected) return;
+            if (!isConnected || !dataChannel || dataChannel.readyState !== 'open') return;
             e.preventDefault();
             screenContainer.focus();
             const button = e.button === 2 ? 2 : 0;
-            if (dataChannel && dataChannel.readyState === 'open') {
-                dataChannel.send(JSON.stringify({ action: 'mousedown', button: button }));
-            }
+            dataChannel.send(JSON.stringify({ action: 'mousedown', button: button }));
         });
 
         screenContainer.addEventListener('mouseup', (e) => {
-            if (!isConnected) return;
+            if (!isConnected || !dataChannel || dataChannel.readyState !== 'open') return;
             e.preventDefault();
             const button = e.button === 2 ? 2 : 0;
-            if (dataChannel && dataChannel.readyState === 'open') {
-                dataChannel.send(JSON.stringify({ action: 'mouseup', button: button }));
-            }
+            dataChannel.send(JSON.stringify({ action: 'mouseup', button: button }));
         });
 
         screenContainer.addEventListener('contextmenu', e => e.preventDefault());
 
         screenContainer.addEventListener('wheel', (e) => {
-            if (!isConnected) return;
+            if (!isConnected || !dataChannel || dataChannel.readyState !== 'open') return;
             e.preventDefault();
             const delta = e.deltaY < 0 ? 1 : -1;
-            if (dataChannel && dataChannel.readyState === 'open') {
-                dataChannel.send(JSON.stringify({ action: 'scroll', delta: delta }));
-            }
+            dataChannel.send(JSON.stringify({ action: 'scroll', delta: delta }));
         });
 
         window.addEventListener('keydown', (e) => {
-            if (!isConnected) return;
+            if (!isConnected || !dataChannel || dataChannel.readyState !== 'open') return;
             e.preventDefault();
-            if (dataChannel && dataChannel.readyState === 'open') {
-                dataChannel.send(JSON.stringify({ action: 'keydown', keyCode: e.keyCode }));
-            }
+            dataChannel.send(JSON.stringify({ action: 'keydown', keyCode: e.keyCode }));
         });
 
         window.addEventListener('keyup', (e) => {
-            if (!isConnected) return;
+            if (!isConnected || !dataChannel || dataChannel.readyState !== 'open') return;
             e.preventDefault();
-            if (dataChannel && dataChannel.readyState === 'open') {
-                dataChannel.send(JSON.stringify({ action: 'keyup', keyCode: e.keyCode }));
-            }
+            dataChannel.send(JSON.stringify({ action: 'keyup', keyCode: e.keyCode }));
         });
 
         function toggleFullScreen() {
