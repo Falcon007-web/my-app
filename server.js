@@ -1,33 +1,8 @@
-const WebSocket = require('ws');
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
+ws.on('message', (message, isBinary) => {
+        // Buffer yoki binar ma'lumot kelganini aniq tekshiramiz (provayderlar va kutubxona uchun eng xavfsiz usul)
+        const isBin = Buffer.isBuffer(message) || isBinary || (message instanceof ArrayBuffer);
 
-const server = http.createServer((req, res) => {
-    // URL manzilini tekshirish (/sharing yoki asosiy sahifa)
-    let filePath = path.join(__dirname, 'public', 'index.html');
-    
-    fs.readFile(filePath, (err, data) => {
-        if (err) {
-            res.writeHead(404, { 'Content-Type': 'text/plain' });
-            res.end('index.html topilmadi!');
-        } else {
-            res.writeHead(200, { 'Content-Type': 'text/html' });
-            res.end(data);
-        }
-    });
-});
-
-const wss = new WebSocket.Server({ server });
-
-const sessions = new Map(); // token -> { agentWs, viewers: Set, agentName }
-
-wss.on('connection', (ws, req) => {
-    let currentToken = null;
-    let currentRole = null;
-
-    ws.on('message', (message, isBinary) => {
-        if (isBinary) {
+        if (isBin) {
             // Agentdan kelayotgan ekran rasmlarini (jpeg) barcha viewer'larga tarqatish
             if (currentRole === 'agent' && currentToken) {
                 const session = sessions.get(currentToken);
@@ -62,7 +37,6 @@ wss.on('connection', (ws, req) => {
 
                     const sharingUrl = `https://admin.falconsupportsession.com/sharing?c=${currentToken}`;
                     
-                    // Agentga muvaffaqiyatli ulanganini va sharing havolasini yuboramiz
                     ws.send(JSON.stringify({
                         type: 'registered',
                         sharingUrl: sharingUrl
@@ -105,26 +79,3 @@ wss.on('connection', (ws, req) => {
             }
         }
     });
-
-    ws.on('close', () => {
-        if (currentToken && sessions.has(currentToken)) {
-            const session = sessions.get(currentToken);
-            if (ws === session.agentWs) {
-                session.agentWs = null;
-                for (let viewerWs of session.viewers) {
-                    if (viewerWs.readyState === WebSocket.OPEN) {
-                        viewerWs.send(JSON.stringify({ type: 'disconnected' }));
-                    }
-                }
-                console.log('Agent disconnected for token:', currentToken);
-            } else {
-                session.viewers.delete(ws);
-            }
-        }
-    });
-});
-
-const PORT = 3030;
-server.listen(PORT, '127.0.0.1', () => {
-    console.log(`Server running on port ${PORT} for domain admin.falconsupportsession.com`);
-});
