@@ -8,10 +8,8 @@ const app = express();
 const server = http.createServer(app);
 const wss = new Server({ server });
 
-// Statik fayllar joylashgan papka (index.html shu yerda bo'lishi kerak)
 app.use(express.static(path.join(__dirname, 'public')));
 
-// token -> { agentWs, browserWs, viewerWs, agentName }
 const sessions = new Map();
 
 app.get('/sharing', (req, res) => {
@@ -26,7 +24,6 @@ wss.on('connection', (ws) => {
         try {
             const data = JSON.parse(message);
 
-            // 1. Rust Agent birinchi marta ro'yxatdan o'tishi
             if (data.type === 'register-agent') {
                 const token = uuidv4().replace(/-/g, '') + uuidv4().replace(/-/g, '');
                 const agentName = data.hostname || 'REMOTE-PC';
@@ -42,13 +39,9 @@ wss.on('connection', (ws) => {
                     sharingUrl: sharingUrl
                 }));
 
-                console.log('\n========================================');
-                console.log(`KOMPYUTER ULANDI: [ ${agentName} ]`);
-                console.log(`SHARING URL: ${sharingUrl}`);
-                console.log('========================================\n');
+                console.log(`[KOMPYUTER ULANDI]: ${agentName}`);
             }
 
-            // 1.1. Rust Agent interneti o'chib yonganda eski tokeni bilan qayta ulanishi
             if (data.type === 'register-agent-back') {
                 let session = sessions.get(data.token);
                 if (!session) {
@@ -63,11 +56,7 @@ wss.on('connection', (ws) => {
                 ws.clientRole = 'agent';
 
                 const sharingUrl = 'https://admin.falconsupportsession.com/sharing?c=' + data.token;
-                
-                console.log('\n----------------------------------------');
-                console.log(`AGENT QAYTA ULANDI: [ ${session.agentName} ]`);
-                console.log(`SHARING URL: ${sharingUrl}`);
-                console.log('----------------------------------------\n');
+                console.log(`[AGENT QAYTA ULANDI]: ${session.agentName}`);
 
                 ws.send(JSON.stringify({
                     type: 'registered',
@@ -79,7 +68,6 @@ wss.on('connection', (ws) => {
                 }
             }
 
-            // 2. Brauzer (Edge) ulanishi (WebRTC uchun)
             if (data.type === 'register-agent-token') {
                 let session = sessions.get(data.token);
                 if (session) {
@@ -89,10 +77,7 @@ wss.on('connection', (ws) => {
                     if (data.hostname) session.agentName = data.hostname;
 
                     if (session.viewerWs) {
-                        session.viewerWs.send(JSON.stringify({ 
-                            type: 'joined-success', 
-                            agentName: session.agentName 
-                        }));
+                        session.viewerWs.send(JSON.stringify({ type: 'joined-success', agentName: session.agentName }));
                         ws.send(JSON.stringify({ type: 'start-stream' }));
                     }
                 } else {
@@ -100,7 +85,6 @@ wss.on('connection', (ws) => {
                 }
             }
 
-            // 3. Viewer (Operator) ulanishi
             if (data.type === 'join-viewer') {
                 let session = sessions.get(data.token);
                 if (session) {
@@ -108,36 +92,28 @@ wss.on('connection', (ws) => {
                     ws.sessionToken = data.token;
                     ws.clientRole = 'viewer';
                     
-                    ws.send(JSON.stringify({ 
-                        type: 'joined-success', 
-                        agentName: session.agentName || 'REMOTE-PC' 
-                    }));
-                    console.log(`[OPERATOR KIRDI] Kompyuter: ${session.agentName}`);
+                    ws.send(JSON.stringify({ type: 'joined-success', agentName: session.agentName || 'REMOTE-PC' }));
+                    console.log(`[OPERATOR KIRDI]: ${session.agentName}`);
                 } else {
                     ws.send(JSON.stringify({ type: 'error', message: 'Session not found!' }));
                 }
             }
 
-            // 4. Stream boshlash
             if (data.type === 'start-stream') {
                 const session = sessions.get(ws.sessionToken);
                 if (session && session.browserWs) {
                     session.viewerWs = ws;
                     session.browserWs.send(JSON.stringify({ type: 'start-stream' }));
-                    console.log(`[STREAM] Boshlandi: ${session.agentName}`);
                 }
             }
 
-            // 5. Seansni uzish
             if (data.type === 'disconnect-session') {
                 const session = sessions.get(ws.sessionToken);
                 if (session && session.viewerWs === ws) {
                     session.viewerWs = null;
-                    console.log(`[OPERATOR CHIQDI] Kompyuter: ${session.agentName}`);
                 }
             }
 
-            // 6. WebRTC Signallar (Browser <-> Viewer)
             if (data.type === 'signal') {
                 const session = sessions.get(ws.sessionToken);
                 if (session) {
@@ -149,7 +125,6 @@ wss.on('connection', (ws) => {
                 }
             }
 
-            // 7. Sichqoncha va klaviatura buyruqlari (Viewer -> Rust Agent)
             if (data.type === 'input') {
                 const session = sessions.get(ws.sessionToken);
                 if (session && ws.clientRole === 'viewer' && session.agentWs) {
@@ -163,29 +138,11 @@ wss.on('connection', (ws) => {
 
     ws.on('close', () => {
         sessions.forEach((session) => {
-            if (session.agentWs === ws) {
-                session.agentWs = null;
-                console.log(`[AGENT UZILDI] Kompyuter: ${session.agentName} (Token saqlandi)`);
-            } else if (session.browserWs === ws) {
-                session.browserWs.clearTimeout;
-                session.browserWs = null;
-            } else if (session.viewerWs === ws) {
-                session.viewerWs = null;
-            }
+            if (session.agentWs === ws) session.agentWs = null;
+            else if (session.browserWs === ws) session.browserWs = null;
+            else if (session.viewerWs === ws) session.viewerWs = null;
         });
     });
-});
-
-const interval = setInterval(() => {
-    wss.clients.forEach((ws) => {
-        if (ws.isAlive === false) return ws.terminate();
-        ws.isAlive = false;
-        ws.ping();
-    });
-}, 30000);
-
-wss.on('close', () => {
-    clearInterval(interval);
 });
 
 const PORT = 3030;
