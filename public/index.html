@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Tools - Remote Desktop (WebRTC)</title>
+    <title>Admin Tools - Remote Desktop</title>
     <style>
         body {
             margin: 0;
@@ -56,10 +56,9 @@
             height: 100%;
             overflow: hidden;
             cursor: none !important;
-            outline: none;
         }
 
-        #remoteScreen {
+        video {
             width: 100%;
             height: 100%;
             object-fit: contain;
@@ -91,14 +90,14 @@
         }
     </style>
 </head>
-<body tabindex="0">
+<body>
 
     <svg id="custom-cursor" viewBox="0 0 24 24" fill="yellow" stroke="black" stroke-width="1.5">
         <polygon points="3,2 3,21 9,15 15,22 18,20 12,13 20,13" />
     </svg>
 
     <header>
-        <h3 style="margin:0; color:#fff; font-size: 16px;">Admin Tools <span style="font-size: 11px; color: #aaa;">In God We trust! (WebRTC)</span></h3>
+        <h3 style="margin:0; color:#fff; font-size: 16px;">Admin Tools <span style="font-size: 11px; color: #aaa;">In God We trust!</span></h3>
         <div id="status-top" style="color: #28a745; font-weight: bold; font-size: 13px;">Ожидание агента...</div>
     </header>
 
@@ -112,11 +111,11 @@
         <button onclick="toggleFullScreen()" style="margin-left: auto;">Полноэкранный</button>
     </div>
 
-    <div id="screen-container" tabindex="0">
+    <div id="screen-container">
         <div id="center-overlay">
             <h2 id="overlay-msg" style="color: #fff; font-size: 20px;">Поиск агента на компьютере...</h2>
         </div>
-        <video id="remoteScreen" autoplay playsinline></video>
+        <video id="remoteVideo" autoplay playsinline></video>
     </div>
 
     <script>
@@ -125,17 +124,14 @@
         let ws;
         let pc;
         let dataChannel;
+        let localStream = null;
         let isConnected = false;
 
         let timerInterval = null;
         let secondsElapsed = 0;
 
         const customCursor = document.getElementById('custom-cursor');
-        const remoteScreen = document.getElementById('remoteScreen');
-        const screenContainer = document.getElementById('screen-container');
-
-        const urlParams = new URLSearchParams(window.location.search);
-        const token = urlParams.get('c');
+        const remoteVideo = document.getElementById('remoteVideo');
 
         function startSessionTimer() {
             stopSessionTimer();
@@ -159,85 +155,181 @@
             document.getElementById('sessionTimer').innerText = '00:00:00';
         }
 
-        function initWebSocket() {
-            ws = new WebSocket(wsUrl);
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('c');
+        const isAgentMode = window.location.hash === '#agent';
 
+        const rtcConfig = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        };
+
+        const screenContainer = document.getElementById('screen-container');
+
+        let lastMouseX = 0;
+        let lastMouseY = 0;
+        let mouseMoveScheduled = false;
+
+        function sendInput(data) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'input', payload: data }));
+            }
+        }
+
+        function getVideoContentRect(video) {
+            const rect = video.getBoundingClientRect();
+            if (!video.videoWidth || !video.videoHeight) return rect;
+
+            const videoRatio = video.videoWidth / video.videoHeight;
+            const elementRatio = rect.width / rect.height;
+
+            let renderWidth = rect.width;
+            let renderHeight = rect.height;
+            let offsetX = 0;
+            let offsetY = 0;
+
+            if (elementRatio > videoRatio) {
+                renderWidth = rect.height * videoRatio;
+                offsetX = (rect.width - renderWidth) / 2;
+            } else if (elementRatio < videoRatio) {
+                renderHeight = rect.width / videoRatio;
+                offsetY = (rect.height - renderHeight) / 2;
+            }
+
+            return {
+                left: rect.left + offsetX,
+                top: rect.top + offsetY,
+                right: rect.left + offsetX + renderWidth,
+                bottom: rect.top + offsetY + renderHeight,
+                width: renderWidth,
+                height: renderHeight
+            };
+        }
+
+        screenContainer.addEventListener('mousemove', (e) => {
+            if (!isConnected) return;
+            
+            customCursor.style.left = (e.clientX) + 'px';
+            customCursor.style.top = (e.clientY) + 'px';
+
+            const rect = getVideoContentRect(remoteVideo);
+
+            if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
+                return;
+            }
+
+            lastMouseX = (e.clientX - rect.left) / rect.width;
+            lastMouseY = (e.clientY - rect.top) / rect.height;
+
+            if (!mouseMoveScheduled) {
+                mouseMoveScheduled = true;
+                requestAnimationFrame(() => {
+                    sendInput({ action: 'mousemove', x: lastMouseX, y: lastMouseY });
+                    mouseMoveScheduled = false;
+                });
+            }
+        });
+
+        screenContainer.addEventListener('mouseenter', () => {
+            if (isConnected) customCursor.style.display = 'block';
+        });
+
+        screenContainer.addEventListener('mouseleave', () => {
+            customCursor.style.display = 'none';
+        });
+
+        screenContainer.addEventListener('mousedown', (e) => {
+            if (!isConnected) return;
+            sendInput({ action: 'mousedown', button: e.button });
+        });
+
+        screenContainer.addEventListener('mouseup', (e) => {
+            if (!isConnected) return;
+            sendInput({ action: 'mouseup', button: e.button });
+        });
+
+        screenContainer.addEventListener('contextmenu', (e) => e.preventDefault());
+
+        window.addEventListener('keydown', (e) => {
+            if (!isConnected) return;
+            sendInput({ action: 'keydown', key: e.key, code: e.code });
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (!isConnected) return;
+            sendInput({ action: 'keyup', key: e.key, code: e.code });
+        });
+
+        function init() {
+            ws = new WebSocket(wsUrl);
             ws.onopen = () => {
-                if (token) {
+                if (isAgentMode && token) {
+                    ws.send(JSON.stringify({ type: 'register-agent-token', token: token, hostname: "PC-" + Math.floor(Math.random()*9000+1000) }));
+                } else if (token) {
                     ws.send(JSON.stringify({ type: 'join-viewer', token: token }));
                 }
             };
 
             ws.onmessage = async (event) => {
-                try {
-                    const message = JSON.parse(event.data);
-                    
-                    if (message.type === 'joined-success') {
-                        document.getElementById('status-top').innerText = 'Агент найден: ' + (message.agentName || 'Remote-PC');
-                        document.getElementById('overlay-msg').innerText = 'Готово к подключению WebRTC';
+                const message = JSON.parse(event.data);
+
+                if (message.type === 'joined-success') {
+                    document.getElementById('status-top').innerText = 'Агент найден: ' + message.agentName;
+                    document.getElementById('overlay-msg').innerText = 'Готово к подключению';
+                    const mainBtn = document.getElementById('main-action-btn');
+                    mainBtn.style.display = 'inline-block';
+                    mainBtn.innerText = 'Подключить';
+                    mainBtn.className = 'connect-btn';
+
+                    if (sessionStorage.getItem('autoConnect') === 'true' && !isConnected) {
+                        document.getElementById('overlay-msg').innerText = 'Установка соединения...';
+                        setupPeer('viewer');
+                        ws.send(JSON.stringify({ type: 'start-stream' }));
+                        isConnected = true;
+                        customCursor.style.display = 'block';
+                        sessionStorage.setItem('autoConnect', 'true');
+                        mainBtn.innerText = 'Отключить';
+                        mainBtn.className = 'disconnect-btn';
                         
-                        const mainBtn = document.getElementById('main-action-btn');
-                        mainBtn.style.display = 'inline-block';
-                        mainBtn.innerText = 'Подключить';
-                        mainBtn.className = 'connect-btn';
+                        const badge = document.getElementById('status-badge');
+                        badge.innerText = 'Подключено';
+                        badge.style.background = '#d4edda';
+                        badge.style.color = '#155724';
+                        badge.style.borderColor = '#c3e6cb';
+
+                        startSessionTimer();
                     }
-                    else if (message.type === 'signal') {
-                        if (message.payload) {
-                            if (message.payload.sdp) {
-                                if (pc) {
-                                    await pc.setRemoteDescription(new RTCSessionDescription(message.payload.sdp));
-                                }
-                            } else if (message.payload.candidate) {
-                                if (pc && message.payload.candidate) {
-                                    await pc.addIceCandidate(new RTCIceCandidate(message.payload.candidate));
-                                }
-                            }
+                }
+
+                if (message.type === 'start-stream' && isAgentMode) {
+                    await startAgentSharing();
+                }
+
+                if (message.type === 'disconnected') {
+                    resetInterface("Сессия завершена / разорвана");
+                }
+
+                if (message.type === 'signal') {
+                    if (!pc) setupPeer(isAgentMode ? 'agent' : 'viewer');
+
+                    if (message.payload.sdp) {
+                        await pc.setRemoteDescription(new RTCSessionDescription(message.payload.sdp));
+                        if (message.payload.sdp.type === 'offer') {
+                            const answer = await pc.createAnswer();
+                            await pc.setLocalDescription(answer);
+                            ws.send(JSON.stringify({ type: 'signal', payload: { sdp: pc.localDescription } }));
+                        }
+                    } else if (message.payload.candidate) {
+                        try {
+                            await pc.addIceCandidate(new RTCIceCandidate(message.payload.candidate));
+                        } catch (e) {
+                            console.error('ICE error:', e);
                         }
                     }
-                    else if (message.type === 'disconnected') {
-                        resetInterface("Сессия завершена / разорвана");
-                    }
-                } catch (e) {
-                    console.error("Message handling error:", e);
                 }
             };
-        }
-
-        async function startWebRTC() {
-            pc = new RTCPeerConnection({
-                iceServers: [
-                    { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun:stun1.l.google.com:19302' }
-                ]
-            });
-
-            pc.ontrack = (event) => {
-                if (remoteScreen.srcObject !== event.streams[0]) {
-                    remoteScreen.srcObject = event.streams[0];
-                    document.getElementById('center-overlay').style.display = 'none';
-                }
-            };
-
-            pc.onicecandidate = (event) => {
-                if (event.candidate) {
-                    ws.send(JSON.stringify({ 
-                        type: 'signal', 
-                        payload: { candidate: event.candidate } 
-                    }));
-                }
-            };
-
-            // DataChannel ni qotib qolmasligi uchun optimallashtiramiz
-            dataChannel = pc.createDataChannel('control-channel', { ordered: false, maxRetransmits: 0 });
-            dataChannel.onopen = () => console.log("WebRTC DataChannel ochiq va barqaror");
-
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-
-            ws.send(JSON.stringify({ 
-                type: 'signal', 
-                payload: { sdp: offer } 
-            }));
         }
 
         function toggleConnection() {
@@ -245,10 +337,12 @@
             const badge = document.getElementById('status-badge');
 
             if (!isConnected) {
+                document.getElementById('overlay-msg').innerText = 'Установка соединения...';
+                setupPeer('viewer');
+                ws.send(JSON.stringify({ type: 'start-stream' }));
                 isConnected = true;
                 customCursor.style.display = 'block';
-                screenContainer.focus();
-                
+                sessionStorage.setItem('autoConnect', 'true');
                 mainBtn.innerText = 'Отключить';
                 mainBtn.className = 'disconnect-btn';
                 
@@ -258,23 +352,35 @@
                 badge.style.borderColor = '#c3e6cb';
 
                 startSessionTimer();
-                startWebRTC();
             } else {
-                resetInterface("Соединение разорвано");
+                disconnectSession();
             }
+        }
+
+        function disconnectSession() {
+            sessionStorage.removeItem('autoConnect');
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'disconnect-session' }));
+            }
+            resetInterface("Соединение разорвано");
         }
 
         function resetInterface(msg) {
             isConnected = false;
             customCursor.style.display = 'none';
+            sessionStorage.removeItem('autoConnect');
             stopSessionTimer();
             
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
             if (pc) {
                 pc.close();
                 pc = null;
             }
-            
-            remoteScreen.srcObject = null;
+
+            remoteVideo.srcObject = null;
             document.getElementById('center-overlay').style.display = 'flex';
             document.getElementById('overlay-msg').innerText = msg;
             
@@ -289,115 +395,82 @@
             badge.style.borderColor = '#f5c6cb';
         }
 
-        let lastMouseNormX = 0;
-        let lastMouseNormY = 0;
-        let isMouseMovePending = false;
+        async function startAgentSharing() {
+            try {
+                if (localStream) {
+                    localStream.getTracks().forEach(track => track.stop());
+                    localStream = null;
+                }
 
-        remoteScreen.addEventListener('mousemove', (e) => {
-            if (!isConnected || !dataChannel || dataChannel.readyState !== 'open') return;
-
-            const rect = remoteScreen.getBoundingClientRect();
-            const naturalWidth = remoteScreen.videoWidth || 1920;
-            const naturalHeight = remoteScreen.videoHeight || 1080;
-
-            const clientWidth = rect.width;
-            const clientHeight = rect.height;
-
-            const imageRatio = naturalWidth / naturalHeight;
-            const clientRatio = clientWidth / clientHeight;
-
-            let renderWidth, renderHeight, offsetX, offsetY;
-
-            if (clientRatio > imageRatio) {
-                renderHeight = clientHeight;
-                renderWidth = clientHeight * imageRatio;
-                offsetX = (clientWidth - renderWidth) / 2;
-                offsetY = 0;
-            } else {
-                renderWidth = clientWidth;
-                renderHeight = clientWidth / imageRatio;
-                offsetX = 0;
-                offsetY = (clientHeight - renderHeight) / 2;
-            }
-
-            const mouseXInElement = e.clientX - rect.left;
-            const mouseYInElement = e.clientY - rect.top;
-
-            if (
-                mouseXInElement < offsetX || mouseXInElement > (offsetX + renderWidth) ||
-                mouseYInElement < offsetY || mouseYInElement > (offsetY + renderHeight)
-            ) {
-                customCursor.style.display = 'none';
-                return;
-            } else {
-                customCursor.style.display = 'block';
-            }
-
-            customCursor.style.left = e.clientX + 'px';
-            customCursor.style.top = e.clientY + 'px';
-
-            lastMouseNormX = (mouseXInElement - offsetX) / renderWidth;
-            lastMouseNormY = (mouseYInElement - offsetY) / renderHeight;
-
-            if (!isMouseMovePending) {
-                isMouseMovePending = true;
-                requestAnimationFrame(() => {
-                    if (dataChannel && dataChannel.readyState === 'open') {
-                        dataChannel.send(JSON.stringify({ action: 'mousemove', x: lastMouseNormX, y: lastMouseNormY }));
-                    }
-                    isMouseMovePending = false;
+                localStream = await navigator.mediaDevices.getDisplayMedia({ 
+                    video: { 
+                        cursor: "always",
+                        width: { ideal: 1280, max: 1920 },
+                        height: { ideal: 720, max: 1080 },
+                        frameRate: { ideal: 20, max: 30 }
+                    }, 
+                    audio: false 
                 });
-            }
-        });
 
-        screenContainer.addEventListener('mouseenter', () => { if (isConnected) customCursor.style.display = 'block'; });
-        screenContainer.addEventListener('mouseleave', () => { customCursor.style.display = 'none'; });
+                document.getElementById('center-overlay').style.display = 'none';
 
-        screenContainer.addEventListener('mousedown', (e) => {
-            if (!isConnected || !dataChannel || dataChannel.readyState !== 'open') return;
-            e.preventDefault();
-            screenContainer.focus();
-            const button = e.button === 2 ? 2 : 0;
-            dataChannel.send(JSON.stringify({ action: 'mousedown', button: button }));
-        });
+                setupPeer('agent');
 
-        screenContainer.addEventListener('mouseup', (e) => {
-            if (!isConnected || !dataChannel || dataChannel.readyState !== 'open') return;
-            e.preventDefault();
-            const button = e.button === 2 ? 2 : 0;
-            dataChannel.send(JSON.stringify({ action: 'mouseup', button: button }));
-        });
+                localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
-        screenContainer.addEventListener('contextmenu', e => e.preventDefault());
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                ws.send(JSON.stringify({ type: 'signal', payload: { sdp: pc.localDescription } }));
 
-        screenContainer.addEventListener('wheel', (e) => {
-            if (!isConnected || !dataChannel || dataChannel.readyState !== 'open') return;
-            e.preventDefault();
-            const delta = e.deltaY < 0 ? 1 : -1;
-            dataChannel.send(JSON.stringify({ action: 'scroll', delta: delta }));
-        });
-
-        window.addEventListener('keydown', (e) => {
-            if (!isConnected || !dataChannel || dataChannel.readyState !== 'open') return;
-            e.preventDefault();
-            dataChannel.send(JSON.stringify({ action: 'keydown', keyCode: e.keyCode }));
-        });
-
-        window.addEventListener('keyup', (e) => {
-            if (!isConnected || !dataChannel || dataChannel.readyState !== 'open') return;
-            e.preventDefault();
-            dataChannel.send(JSON.stringify({ action: 'keyup', keyCode: e.keyCode }));
-        });
-
-        function toggleFullScreen() {
-            if (!document.documentElement.fullscreenElement) {
-                document.documentElement.requestFullscreen();
-            } else {
-                if (document.exitFullscreen) document.exitFullscreen();
+                localStream.getVideoTracks()[0].onended = () => {
+                    disconnectSession();
+                };
+            } catch (err) {
+                console.error('Screen capture error:', err.message);
             }
         }
 
-        initWebSocket();
+        function setupPeer(role) {
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+            pc = new RTCPeerConnection(rtcConfig);
+
+            if (role === 'viewer') {
+                pc.ontrack = (event) => {
+                    if (remoteVideo.srcObject !== event.streams[0]) {
+                        remoteVideo.srcObject = event.streams[0];
+                        document.getElementById('center-overlay').style.display = 'none';
+                        document.getElementById('status-top').innerText = 'Трансляция активна';
+                        
+                        startSessionTimer();
+                        
+                        remoteVideo.play().catch(err => {
+                            console.log("Autoplay blocked:", err);
+                        });
+                    }
+                };
+            }
+
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    ws.send(JSON.stringify({ type: 'signal', payload: { candidate: event.candidate } }));
+                }
+            };
+        }
+
+        function toggleFullScreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                }
+            }
+        }
+
+        init();
     </script>
 </body>
 </html>
