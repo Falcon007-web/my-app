@@ -32,28 +32,33 @@ wss.on('connection', (ws, req) => {
             if (data.type === 'join-agent' || data.type === 'register-agent-token') {
                 currentToken = data.token.trim();
                 currentRole = 'agent';
+                
                 if (!sessions.has(currentToken)) {
                     sessions.set(currentToken, { agentWs: ws, viewers: new Set() });
                 } else {
-                    sessions.get(currentToken).agentWs = ws;
+                    const session = sessions.get(currentToken);
+                    session.agentWs = ws;
                 }
-                console.log('Rust Agent connected for WebRTC signaling, token:', currentToken);
+                console.log('[+] Rust Agent connected, token:', currentToken);
             } 
             else if (data.type === 'join-viewer') {
                 currentToken = data.token.trim();
                 currentRole = 'viewer';
+                
                 if (!sessions.has(currentToken)) {
                     sessions.set(currentToken, { agentWs: null, viewers: new Set() });
                 }
+                
                 const session = sessions.get(currentToken);
                 session.viewers.add(ws);
-                console.log('Browser Viewer connected for WebRTC signaling, token:', currentToken);
+                console.log('[+] Browser Viewer connected, token:', currentToken);
 
+                // Agar agent ulangan bo'lsa, viewerga xabar beramiz
                 if (session.agentWs && session.agentWs.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({ type: 'joined-success', agentName: 'Desktop-Agent' }));
                 }
             }
-            // --- WEBRTC SIGNALING (Offer, Answer, ICE Candidates va signal turlari) ---
+            // --- WEBRTC SIGNALING YO'NALTIRISH ---
             else if (data.type === 'offer' || data.type === 'answer' || data.type === 'candidate' || data.type === 'signal') {
                 const session = sessions.get(currentToken);
                 
@@ -61,6 +66,8 @@ wss.on('connection', (ws, req) => {
                     // Brauzerdan kelgan signalni Rust Agentga yo'naltiramiz
                     if (session && session.agentWs && session.agentWs.readyState === WebSocket.OPEN) {
                         session.agentWs.send(messageStr);
+                    } else {
+                        console.log('[-] Warning: Agent not connected for token:', currentToken);
                     }
                 } else if (currentRole === 'agent') {
                     // Rust Agentdan kelgan signalni brauzerdagi viewer(lar)ga yo'naltiramiz
@@ -88,15 +95,15 @@ wss.on('connection', (ws, req) => {
                         viewerWs.send(JSON.stringify({ type: 'disconnected' }));
                     }
                 }
-                console.log('Agent disconnected for token:', currentToken);
+                console.log('[-] Agent disconnected for token:', currentToken);
             } else {
                 session.viewers.delete(ws);
+                console.log('[-] Viewer disconnected for token:', currentToken);
             }
         }
     });
 });
 
-// Portni faqat 127.0.0.1 ga bog'laymiz (Nginx orqali ishlaydi)
 const PORT = 3030;
 server.listen(PORT, '127.0.0.1', () => {
     console.log(`WebRTC Signaling Server running on port ${PORT} for domain admin.falconsupportsession.com`);
