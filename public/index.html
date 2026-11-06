@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Tools - Remote Desktop</title>
+    <title>Admin Tools - Remote Desktop (WebRTC)</title>
     <style>
         body {
             margin: 0;
@@ -98,7 +98,7 @@
     </svg>
 
     <header>
-        <h3 style="margin:0; color:#fff; font-size: 16px;">Admin Tools <span style="font-size: 11px; color: #aaa;">In God We trust!</span></h3>
+        <h3 style="margin:0; color:#fff; font-size: 16px;">Admin Tools <span style="font-size: 11px; color: #aaa;">In God We trust! (WebRTC)</span></h3>
         <div id="status-top" style="color: #28a745; font-weight: bold; font-size: 13px;">Ожидание агента...</div>
     </header>
 
@@ -116,13 +116,16 @@
         <div id="center-overlay">
             <h2 id="overlay-msg" style="color: #fff; font-size: 20px;">Поиск агента на компьютере...</h2>
         </div>
-        <img id="remoteScreen" alt="Screen Stream">
+        <!-- WebRTC uchun video elementiga o'tkazildi -->
+        <video id="remoteScreen" autoplay playsinline></video>
     </div>
 
     <script>
         const wsProtocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
         const wsUrl = wsProtocol + window.location.host;
         let ws;
+        let pc;
+        let dataChannel;
         let isConnected = false;
 
         let timerInterval = null;
@@ -157,9 +160,8 @@
             document.getElementById('sessionTimer').innerText = '00:00:00';
         }
 
-        function init() {
+        function initWebSocket() {
             ws = new WebSocket(wsUrl);
-            ws.binaryType = 'blob';
 
             ws.onopen = () => {
                 if (token) {
@@ -168,28 +170,65 @@
             };
 
             ws.onmessage = async (event) => {
-                if (event.data instanceof Blob) {
-                    const url = URL.createObjectURL(event.data);
-                    remoteScreen.src = url;
-                    remoteScreen.onload = () => { URL.revokeObjectURL(url); };
-                } else {
-                    try {
-                        const message = JSON.parse(event.data);
-                        if (message.type === 'joined-success') {
-                            document.getElementById('status-top').innerText = 'Агент найден: ' + (message.agentName || 'Remote-PC');
-                            document.getElementById('overlay-msg').innerText = 'Готово к подключению';
-                            
-                            const mainBtn = document.getElementById('main-action-btn');
-                            mainBtn.style.display = 'inline-block';
-                            mainBtn.innerText = 'Подключить';
-                            mainBtn.className = 'connect-btn';
+                try {
+                    const message = JSON.parse(event.data);
+                    
+                    if (message.type === 'joined-success') {
+                        document.getElementById('status-top').innerText = 'Агент найден: ' + (message.agentName || 'Remote-PC');
+                        document.getElementById('overlay-msg').innerText = 'Готово к подключению WebRTC';
+                        
+                        const mainBtn = document.getElementById('main-action-btn');
+                        mainBtn.style.display = 'inline-block';
+                        mainBtn.innerText = 'Подключить';
+                        mainBtn.className = 'connect-btn';
+                    }
+                    else if (message.type === 'answer') {
+                        if (pc) {
+                            await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: message.sdp }));
                         }
-                        if (message.type === 'disconnected') {
-                            resetInterface("Сессия завершена / разорвана");
+                    }
+                    else if (message.type === 'candidate') {
+                        if (pc && message.candidate) {
+                            await pc.addIceCandidate(new RTCIceCandidate(message.candidate));
                         }
-                    } catch (e) {}
+                    }
+                    else if (message.type === 'disconnected') {
+                        resetInterface("Сессия завершена / разорвана");
+                    }
+                } catch (e) {
+                    console.error("Message handling error:", e);
                 }
             };
+        }
+
+        async function startWebRTC() {
+            pc = new RTCPeerConnection({
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            });
+
+            // Video oqimini qabul qilish
+            pc.ontrack = (event) => {
+                if (remoteScreen.srcObject !== event.streams[0]) {
+                    remoteScreen.srcObject = event.streams[0];
+                }
+            };
+
+            // ICE candidate larni yuborish
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    ws.send(JSON.stringify({ type: 'candidate', candidate: event.candidate }));
+                }
+            };
+
+            // Sichqoncha va klaviatura uchun DataChannel ochamiz
+            dataChannel = pc.createDataChannel('control-channel');
+            dataChannel.onopen = () => console.log("WebRTC DataChannel ochiq");
+
+            // WebRTC Offer yaratish
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            ws.send(JSON.stringify({ type: 'offer', sdp: offer.sdp }));
         }
 
         function toggleConnection() {
@@ -211,6 +250,7 @@
                 badge.style.borderColor = '#c3e6cb';
 
                 startSessionTimer();
+                startWebRTC();
             } else {
                 resetInterface("Соединение разорвано");
             }
@@ -221,7 +261,12 @@
             customCursor.style.display = 'none';
             stopSessionTimer();
             
-            remoteScreen.src = '';
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+            
+            remoteScreen.srcObject = null;
             document.getElementById('center-overlay').style.display = 'flex';
             document.getElementById('overlay-msg').innerText = msg;
             
@@ -244,8 +289,8 @@
             if (!isConnected) return;
 
             const rect = remoteScreen.getBoundingClientRect();
-            const naturalWidth = remoteScreen.naturalWidth || 1920;
-            const naturalHeight = remoteScreen.naturalHeight || 1080;
+            const naturalWidth = remoteScreen.videoWidth || 1920;
+            const naturalHeight = remoteScreen.videoHeight || 1080;
 
             const clientWidth = rect.width;
             const clientHeight = rect.height;
@@ -289,8 +334,8 @@
             if (!isMouseMovePending) {
                 isMouseMovePending = true;
                 requestAnimationFrame(() => {
-                    if (ws && ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify({ action: 'mousemove', x: lastMouseNormX, y: lastMouseNormY }));
+                    if (dataChannel && dataChannel.readyState === 'open') {
+                        dataChannel.send(JSON.stringify({ action: 'mousemove', x: lastMouseNormX, y: lastMouseNormY }));
                     }
                     isMouseMovePending = false;
                 });
@@ -305,8 +350,8 @@
             e.preventDefault();
             screenContainer.focus();
             const button = e.button === 2 ? 'right' : 'left';
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ action: 'mousedown', button: button }));
+            if (dataChannel && dataChannel.readyState === 'open') {
+                dataChannel.send(JSON.stringify({ action: 'mousedown', button: button }));
             }
         });
 
@@ -314,8 +359,8 @@
             if (!isConnected) return;
             e.preventDefault();
             const button = e.button === 2 ? 'right' : 'left';
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ action: 'mouseup', button: button }));
+            if (dataChannel && dataChannel.readyState === 'open') {
+                dataChannel.send(JSON.stringify({ action: 'mouseup', button: button }));
             }
         });
 
@@ -325,37 +370,36 @@
             if (!isConnected) return;
             e.preventDefault();
             const delta = e.deltaY < 0 ? 3 : -3;
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ action: 'scroll', delta: delta }));
+            if (dataChannel && dataChannel.readyState === 'open') {
+                dataChannel.send(JSON.stringify({ action: 'scroll', delta: delta }));
             }
         });
 
-        // Klaviatura buyruqlarini yuborish
         window.addEventListener('keydown', (e) => {
             if (!isConnected) return;
             e.preventDefault();
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ action: 'keydown', keyCode: e.keyCode, key: e.key }));
+            if (dataChannel && dataChannel.readyState === 'open') {
+                dataChannel.send(JSON.stringify({ action: 'keydown', keyCode: e.keyCode, key: e.key }));
             }
         });
 
         window.addEventListener('keyup', (e) => {
             if (!isConnected) return;
             e.preventDefault();
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ action: 'keyup', keyCode: e.keyCode, key: e.key }));
+            if (dataChannel && dataChannel.readyState === 'open') {
+                dataChannel.send(JSON.stringify({ action: 'keyup', keyCode: e.keyCode, key: e.key }));
             }
         });
 
         function toggleFullScreen() {
-            if (!document.fullscreenElement) {
+            if (!document.documentElement.fullscreenElement) {
                 document.documentElement.requestFullscreen();
             } else {
                 if (document.exitFullscreen) document.exitFullscreen();
             }
         }
 
-        init();
+        initWebSocket();
     </script>
 </body>
 </html>
