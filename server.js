@@ -4,7 +4,6 @@ const fs = require('fs');
 const path = require('path');
 
 const server = http.createServer((req, res) => {
-    // URL manzilini tekshirish (/sharing yoki asosiy sahifa)
     let filePath = path.join(__dirname, 'public', 'index.html');
     
     fs.readFile(filePath, (err, data) => {
@@ -19,7 +18,6 @@ const server = http.createServer((req, res) => {
 });
 
 const wss = new WebSocket.Server({ server });
-
 const sessions = new Map(); // token -> { agentWs, viewers: Set, agentName }
 
 wss.on('connection', (ws, req) => {
@@ -27,11 +25,10 @@ wss.on('connection', (ws, req) => {
     let currentRole = null;
 
     ws.on('message', (message, isBinary) => {
-        // Buffer yoki binar ma'lumot kelganini aniq tekshiramiz
         const isBin = Buffer.isBuffer(message) || isBinary || (message instanceof ArrayBuffer);
 
         if (isBin) {
-            // Agentdan kelayotgan ekran rasmlarini (jpeg) barcha viewer'larga tarqatish
+            // Agentdan kelayotgan ekran rasmlari (JPEG)
             if (currentRole === 'agent' && currentToken) {
                 const session = sessions.get(currentToken);
                 if (session && session.viewers) {
@@ -44,67 +41,76 @@ wss.on('connection', (ws, req) => {
             }
         } else {
             try {
-                const data = JSON.parse(message.toString());
+                const rawData = message.toString();
+                const data = JSON.parse(rawData);
 
-                // Rust Agent ulanishi
+                console.log("Kelgan xabar:", data.type);
+
+                // 1. Rust Agent ulanishi va ro'yxatdan o'tishi
                 if (data.type === 'join-agent') {
-                    currentToken = data.token.trim();
+                    currentToken = data.token ? data.token.trim() : null;
                     currentRole = 'agent';
                     
-                    if (!sessions.has(currentToken)) {
-                        sessions.set(currentToken, { 
+                    if (!currentToken) return;
+
+                    let session = sessions.get(currentToken);
+                    if (!session) {
+                        session = { 
                             agentWs: ws, 
                             viewers: new Set(), 
                             agentName: data.hostname || 'REMOTE-PC' 
-                        });
+                        };
+                        sessions.set(currentToken, session);
                     } else {
-                        const session = sessions.get(currentToken);
                         session.agentWs = ws;
                         if (data.hostname) session.agentName = data.hostname;
                     }
 
                     const sharingUrl = `https://admin.falconsupportsession.com/sharing?c=${currentToken}`;
                     
-                    // Agentga muvaffaqiyatli ulanganini va sharing havolasini yuboramiz
+                    // Agentga darhol javob qaytaramiz
                     ws.send(JSON.stringify({
                         type: 'registered',
                         sharingUrl: sharingUrl
                     }));
 
                     console.log('\n========================================');
-                    console.log(`KOMPYUTER ULANDI: [ ${data.hostname || 'REMOTE-PC'} ]`);
+                    console.log(`KOMPYUTER ULANDI: [ ${session.agentName} ]`);
                     console.log(`SHARING URL: ${sharingUrl}`);
                     console.log('========================================\n');
                 } 
-                // Brauzer Viewer ulanishi
+                // 2. Brauzer Viewer ulanishi
                 else if (data.type === 'join-viewer') {
-                    currentToken = data.token.trim();
+                    currentToken = data.token ? data.token.trim() : null;
                     currentRole = 'viewer';
                     
-                    if (!sessions.has(currentToken)) {
-                        sessions.set(currentToken, { agentWs: null, viewers: new Set(), agentName: 'REMOTE-PC' });
+                    if (!currentToken) return;
+
+                    let session = sessions.get(currentToken);
+                    if (!session) {
+                        session = { agentWs: null, viewers: new Set(), agentName: 'REMOTE-PC' };
+                        sessions.set(currentToken, session);
                     }
                     
-                    const session = sessions.get(currentToken);
                     session.viewers.add(ws);
                     console.log('Browser Viewer connected, token:', currentToken);
 
-                    if (session && session.agentWs) {
+                    if (session.agentWs) {
                         ws.send(JSON.stringify({ 
                             type: 'joined-success', 
                             agentName: session.agentName 
                         }));
                     }
                 } 
-                // Viewer'dan agentga yuboriladigan sichqoncha/klaviatura buyruqlari
+                // 3. Sichqoncha va klaviatura buyruqlari (Viewer -> Agent)
                 else if (currentRole === 'viewer') {
                     const session = sessions.get(currentToken);
                     if (session && session.agentWs && session.agentWs.readyState === WebSocket.OPEN) {
-                        session.agentWs.send(message.toString());
+                        session.agentWs.send(rawData);
                     }
                 }
             } catch (e) {
-                console.error('Error parsing message:', e);
+                console.error('JSON xatoligi:', e.message);
             }
         }
     });
@@ -119,7 +125,7 @@ wss.on('connection', (ws, req) => {
                         viewerWs.send(JSON.stringify({ type: 'disconnected' }));
                     }
                 }
-                console.log('Agent disconnected for token:', currentToken);
+                console.log('Agent uzildi, token saqlandi:', currentToken);
             } else {
                 session.viewers.delete(ws);
             }
@@ -129,5 +135,5 @@ wss.on('connection', (ws, req) => {
 
 const PORT = 3030;
 server.listen(PORT, '127.0.0.1', () => {
-    console.log(`Server running on port ${PORT} for domain admin.falconsupportsession.com`);
+    console.log(`Server port ${PORT} da ishga tushdi`);
 });
