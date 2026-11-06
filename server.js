@@ -8,6 +8,7 @@ const app = express();
 const server = http.createServer(app);
 const wss = new Server({ server });
 
+// Statik fayllar joylashgan papka (index.html shu yerda bo'lishi kerak)
 app.use(express.static(path.join(__dirname, 'public')));
 
 // token -> { agentWs, browserWs, viewerWs, agentName }
@@ -25,7 +26,7 @@ wss.on('connection', (ws) => {
         try {
             const data = JSON.parse(message);
 
-            // 1. Asosiy Agent birinchi marta ro'yxatdan o'tishi
+            // 1. Rust Agent birinchi marta ro'yxatdan o'tishi
             if (data.type === 'register-agent') {
                 const token = uuidv4().replace(/-/g, '') + uuidv4().replace(/-/g, '');
                 const agentName = data.hostname || 'REMOTE-PC';
@@ -47,7 +48,7 @@ wss.on('connection', (ws) => {
                 console.log('========================================\n');
             }
 
-            // 1.1. Agent qayta ulanishi (Token bo'yicha)
+            // 1.1. Rust Agent interneti o'chib yonganda eski tokeni bilan qayta ulanishi
             if (data.type === 'register-agent-back') {
                 let session = sessions.get(data.token);
                 if (!session) {
@@ -78,7 +79,7 @@ wss.on('connection', (ws) => {
                 }
             }
 
-            // 2. Puppeteer Brauzer ulanishi (WebRTC video stream uchun)
+            // 2. Brauzer (Edge) ulanishi (WebRTC uchun)
             if (data.type === 'register-agent-token') {
                 let session = sessions.get(data.token);
                 if (session) {
@@ -136,7 +137,7 @@ wss.on('connection', (ws) => {
                 }
             }
 
-            // 6. WebRTC Signallar
+            // 6. WebRTC Signallar (Browser <-> Viewer)
             if (data.type === 'signal') {
                 const session = sessions.get(ws.sessionToken);
                 if (session) {
@@ -148,7 +149,7 @@ wss.on('connection', (ws) => {
                 }
             }
 
-            // 7. Sichqoncha va klaviatura buyruqlari (Operator -> Rust Agent)
+            // 7. Sichqoncha va klaviatura buyruqlari (Viewer -> Rust Agent)
             if (data.type === 'input') {
                 const session = sessions.get(ws.sessionToken);
                 if (session && ws.clientRole === 'viewer' && session.agentWs) {
@@ -166,6 +167,7 @@ wss.on('connection', (ws) => {
                 session.agentWs = null;
                 console.log(`[AGENT UZILDI] Kompyuter: ${session.agentName} (Token saqlandi)`);
             } else if (session.browserWs === ws) {
+                session.browserWs.clearTimeout;
                 session.browserWs = null;
             } else if (session.viewerWs === ws) {
                 session.viewerWs = null;
@@ -187,6 +189,6 @@ wss.on('close', () => {
 });
 
 const PORT = 3030;
-server.listen(PORT, () => {
-    console.log('Server is running on port ' + PORT);
+server.listen(PORT, '127.0.0.1', () => {
+    console.log('Signaling server running on port ' + PORT);
 });
