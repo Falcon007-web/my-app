@@ -28,7 +28,6 @@ wss.on('connection', (ws, req) => {
         const isBin = Buffer.isBuffer(message) || isBinary || (message instanceof ArrayBuffer);
 
         if (isBin) {
-            // Agentdan kelayotgan ekran rasmlari (JPEG)
             if (currentRole === 'agent' && currentToken) {
                 const session = sessions.get(currentToken);
                 if (session && session.viewers) {
@@ -44,13 +43,9 @@ wss.on('connection', (ws, req) => {
                 const rawData = message.toString();
                 const data = JSON.parse(rawData);
 
-                console.log("Kelgan xabar:", data.type);
-
-                // 1. Rust Agent ulanishi va ro'yxatdan o'tishi
                 if (data.type === 'join-agent') {
                     currentToken = data.token ? data.token.trim() : null;
                     currentRole = 'agent';
-                    
                     if (!currentToken) return;
 
                     let session = sessions.get(currentToken);
@@ -65,25 +60,11 @@ wss.on('connection', (ws, req) => {
                         session.agentWs = ws;
                         if (data.hostname) session.agentName = data.hostname;
                     }
-
-                    const sharingUrl = `https://admin.falconsupportsession.com/sharing?c=${currentToken}`;
-                    
-                    // Agentga darhol javob qaytaramiz
-                    ws.send(JSON.stringify({
-                        type: 'registered',
-                        sharingUrl: sharingUrl
-                    }));
-
-                    console.log('\n========================================');
-                    console.log(`KOMPYUTER ULANDI: [ ${session.agentName} ]`);
-                    console.log(`SHARING URL: ${sharingUrl}`);
-                    console.log('========================================\n');
+                    console.log(`Rust Agent connected [ ${session.agentName} ], token:`, currentToken);
                 } 
-                // 2. Brauzer Viewer ulanishi
                 else if (data.type === 'join-viewer') {
                     currentToken = data.token ? data.token.trim() : null;
                     currentRole = 'viewer';
-                    
                     if (!currentToken) return;
 
                     let session = sessions.get(currentToken);
@@ -91,7 +72,6 @@ wss.on('connection', (ws, req) => {
                         session = { agentWs: null, viewers: new Set(), agentName: 'REMOTE-PC' };
                         sessions.set(currentToken, session);
                     }
-                    
                     session.viewers.add(ws);
                     console.log('Browser Viewer connected, token:', currentToken);
 
@@ -102,7 +82,6 @@ wss.on('connection', (ws, req) => {
                         }));
                     }
                 } 
-                // 3. Sichqoncha va klaviatura buyruqlari (Viewer -> Agent)
                 else if (currentRole === 'viewer') {
                     const session = sessions.get(currentToken);
                     if (session && session.agentWs && session.agentWs.readyState === WebSocket.OPEN) {
@@ -110,7 +89,7 @@ wss.on('connection', (ws, req) => {
                     }
                 }
             } catch (e) {
-                console.error('JSON xatoligi:', e.message);
+                console.error('Error parsing message:', e);
             }
         }
     });
@@ -125,7 +104,7 @@ wss.on('connection', (ws, req) => {
                         viewerWs.send(JSON.stringify({ type: 'disconnected' }));
                     }
                 }
-                console.log('Agent uzildi, token saqlandi:', currentToken);
+                console.log('Agent disconnected for token:', currentToken);
             } else {
                 session.viewers.delete(ws);
             }
@@ -135,5 +114,5 @@ wss.on('connection', (ws, req) => {
 
 const PORT = 3030;
 server.listen(PORT, '127.0.0.1', () => {
-    console.log(`Server port ${PORT} da ishga tushdi`);
+    console.log(`Server running on port ${PORT}`);
 });
