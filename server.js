@@ -10,6 +10,7 @@ const wss = new Server({ server });
 
 app.use(express.static(path.join(__dirname, 'public')));
 
+// token -> { agentWs, browserWs, viewerWs, agentName }
 const sessions = new Map();
 
 app.get('/sharing', (req, res) => {
@@ -24,6 +25,7 @@ wss.on('connection', (ws) => {
         try {
             const data = JSON.parse(message);
 
+            // 1. Rust Agent birinchi marta ro'yxatdan o'tishi (Uzun token yaratish)
             if (data.type === 'register-agent') {
                 const token = uuidv4().replace(/-/g, '') + uuidv4().replace(/-/g, '');
                 const agentName = data.hostname || 'REMOTE-PC';
@@ -40,8 +42,10 @@ wss.on('connection', (ws) => {
                 }));
 
                 console.log(`[KOMPYUTER ULANDI]: ${agentName}`);
+                console.log(`SHARING URL: ${sharingUrl}`);
             }
 
+            // 1.1. Rust Agent interneti uzilib yonganda eski uzun tokeni bilan qayta ulanishi
             if (data.type === 'register-agent-back') {
                 let session = sessions.get(data.token);
                 if (!session) {
@@ -68,6 +72,7 @@ wss.on('connection', (ws) => {
                 }
             }
 
+            // 2. Edge Brauzeri ulanishi (WebRTC stream uchun)
             if (data.type === 'register-agent-token') {
                 let session = sessions.get(data.token);
                 if (session) {
@@ -85,6 +90,7 @@ wss.on('connection', (ws) => {
                 }
             }
 
+            // 3. Operator (Viewer) ulanishi
             if (data.type === 'join-viewer') {
                 let session = sessions.get(data.token);
                 if (session) {
@@ -99,6 +105,7 @@ wss.on('connection', (ws) => {
                 }
             }
 
+            // 4. Stream boshlash
             if (data.type === 'start-stream') {
                 const session = sessions.get(ws.sessionToken);
                 if (session && session.browserWs) {
@@ -107,6 +114,7 @@ wss.on('connection', (ws) => {
                 }
             }
 
+            // 5. Seansni uzish
             if (data.type === 'disconnect-session') {
                 const session = sessions.get(ws.sessionToken);
                 if (session && session.viewerWs === ws) {
@@ -114,6 +122,7 @@ wss.on('connection', (ws) => {
                 }
             }
 
+            // 6. WebRTC Signallar (Browser <-> Viewer)
             if (data.type === 'signal') {
                 const session = sessions.get(ws.sessionToken);
                 if (session) {
@@ -125,6 +134,7 @@ wss.on('connection', (ws) => {
                 }
             }
 
+            // 7. Sichqoncha va klaviatura buyruqlari (Viewer -> Rust Agent)
             if (data.type === 'input') {
                 const session = sessions.get(ws.sessionToken);
                 if (session && ws.clientRole === 'viewer' && session.agentWs) {
