@@ -18,16 +18,14 @@ const server = http.createServer((req, res) => {
 });
 
 const wss = new WebSocket.Server({ server });
-const sessions = new Map(); // token -> { agentWs, viewers: Set, agentName }
+const sessions = new Map(); // token -> { agentWs, viewers: Set }
 
 wss.on('connection', (ws, req) => {
     let currentToken = null;
     let currentRole = null;
 
     ws.on('message', (message, isBinary) => {
-        const isBin = Buffer.isBuffer(message) || isBinary || (message instanceof ArrayBuffer);
-
-        if (isBin) {
+        if (isBinary) {
             if (currentRole === 'agent' && currentToken) {
                 const session = sessions.get(currentToken);
                 if (session && session.viewers) {
@@ -40,52 +38,36 @@ wss.on('connection', (ws, req) => {
             }
         } else {
             try {
-                const rawData = message.toString();
-                const data = JSON.parse(rawData);
+                const data = JSON.parse(message.toString());
 
                 if (data.type === 'join-agent') {
-                    currentToken = data.token ? data.token.trim() : null;
+                    currentToken = data.token.trim();
                     currentRole = 'agent';
-                    if (!currentToken) return;
-
-                    let session = sessions.get(currentToken);
-                    if (!session) {
-                        session = { 
-                            agentWs: ws, 
-                            viewers: new Set(), 
-                            agentName: data.hostname || 'REMOTE-PC' 
-                        };
-                        sessions.set(currentToken, session);
+                    if (!sessions.has(currentToken)) {
+                        sessions.set(currentToken, { agentWs: ws, viewers: new Set() });
                     } else {
-                        session.agentWs = ws;
-                        if (data.hostname) session.agentName = data.hostname;
+                        sessions.get(currentToken).agentWs = ws;
                     }
-                    console.log(`Rust Agent connected [ ${session.agentName} ], token:`, currentToken);
+                    console.log('Rust Agent connected, token:', currentToken);
                 } 
                 else if (data.type === 'join-viewer') {
-                    currentToken = data.token ? data.token.trim() : null;
+                    currentToken = data.token.trim();
                     currentRole = 'viewer';
-                    if (!currentToken) return;
-
-                    let session = sessions.get(currentToken);
-                    if (!session) {
-                        session = { agentWs: null, viewers: new Set(), agentName: 'REMOTE-PC' };
-                        sessions.set(currentToken, session);
+                    if (!sessions.has(currentToken)) {
+                        sessions.set(currentToken, { agentWs: null, viewers: new Set() });
                     }
-                    session.viewers.add(ws);
+                    sessions.get(currentToken).viewers.add(ws);
                     console.log('Browser Viewer connected, token:', currentToken);
 
-                    if (session.agentWs) {
-                        ws.send(JSON.stringify({ 
-                            type: 'joined-success', 
-                            agentName: session.agentName 
-                        }));
+                    const session = sessions.get(currentToken);
+                    if (session && session.agentWs) {
+                        ws.send(JSON.stringify({ type: 'joined-success', agentName: 'Desktop-Agent' }));
                     }
-                } 
+                }
                 else if (currentRole === 'viewer') {
                     const session = sessions.get(currentToken);
                     if (session && session.agentWs && session.agentWs.readyState === WebSocket.OPEN) {
-                        session.agentWs.send(rawData);
+                        session.agentWs.send(message.toString());
                     }
                 }
             } catch (e) {
@@ -112,7 +94,8 @@ wss.on('connection', (ws, req) => {
     });
 });
 
+// Portni faqat 127.0.0.1 ga bog'laymiz (Nginx orqali ishlaydi)
 const PORT = 3030;
 server.listen(PORT, '127.0.0.1', () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`Server running on port ${PORT} for domain admin.falconsupportsession.com`);
 });
